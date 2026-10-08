@@ -68,7 +68,8 @@ while that option parameter is at that option (MPC's IndexedEnabling), so a tab 
 mode. Its baked parts (frame, title, text boxes, group labels) go into a per-mode image over the background.
 Top level: `qlinks_track = key,...` sets the Q-Links used outside page-follow mode (default: page 1's).
 `qlink_bounds=column` outlines the controls of the Q-Link column in use, as stock skins do (checked on an MPC One
-only; default: no outline).
+only; default: no outline). `focus_ring=1` tints the touched control and outlines it in theme_accent_hi (MPC's Focus
+component; the default since 2026-09-26 draws nothing).
 Top-level `style=` / `theme_<name>=RRGGBB` lines are the shadow_page.conf ones; `color=` on a
 button overrides its fill. `art_css=skin.css` restyles the browser renderer's artwork (tools/html_art.py).
 
@@ -95,6 +96,7 @@ TILE_ON = ""             # theme_tile_on: fill of a selected/sounding list tile 
 DISPLAY_INK = "cdeb63"   # theme_display_ink: live-text colour over a dotreadout/dotstepper (see readout/stepper below)
 TD3 = False   # style=td3: frames are filled boxes, so widget crops sit on BOX, not the page bg
 QLINK_COLUMNS = False   # qlink_bounds=column: per-column Q-Link outlines (qlink_column_bounds)
+FOCUS_RING = False      # focus_ring=1: the touched control gets a light tint and an accent_hi outline (_focus)
 LABEL_SCALE = 1.0   # label_scale=<n>: scales knob/toggle/pill name+value live-text size and their boxes
 FRAMES = 128               # filmstrip frames emitted by (l)sstrip / (l)strip
 ROT_FRAMES = FRAMES - 1     # rotary knob FilmStrip: a rotation reads one fewer than the strip length
@@ -204,6 +206,7 @@ def apply_theme(top):
     g = globals()
     g["LOOK_DEFAULTS"] = skin_assets.defaults(top)
     g["QLINK_COLUMNS"] = False
+    g["FOCUS_RING"] = False
     for line in top:
         if line.strip() == "style=td3":
             g["TD3"] = True
@@ -215,6 +218,9 @@ def apply_theme(top):
             continue
         if line.startswith("qlink_bounds="):
             g["QLINK_COLUMNS"] = line[len("qlink_bounds="):].strip() == "column"
+            continue
+        if line.startswith("focus_ring="):
+            g["FOCUS_RING"] = line[len("focus_ring="):].strip() not in ("", "0", "no", "off")
             continue
         if line.startswith("scale_names="):
             g["SCALE_NAMES"] = line[len("scale_names="):].strip() not in ("", "0", "no", "off")
@@ -613,8 +619,9 @@ def _local(key, actions, children):
 
 
 def _focus(w, h):
-    return _sub("Focus", {"version": 1, "backgroundColour": "00000000", "outlineColour": "00000000",
-                          "backgroundInset": 2.0, "outlineThickness": 0.0},
+    return _sub("Focus", {"version": 1, "backgroundColour": "14ffffff" if FOCUS_RING else "00000000",
+                          "outlineColour": "ff" + ACCENT_HI if FOCUS_RING else "00000000",
+                          "backgroundInset": 2.0, "outlineThickness": 2.0 if FOCUS_RING else 0.0},
                 _bounds(0, 0, w, h, visible="WhenFocussed"), "Focus")
 
 

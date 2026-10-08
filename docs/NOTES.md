@@ -645,6 +645,9 @@ one `qlinkBoundsData` rectangle per Q-Link column (slots 1-4, 5-8, ...) and `hid
 (AIR OPx-4): MPC outlines the column the Q-Links drive, and each press of the MPC One's Q-Link button moves the outline to
 the next one. Buttons count toward their column's box. The orange box above was the Focus outline, so hiding the bounds
 was never needed to fix it; still, the outline is only checked on an MPC One, so the default stays "0 0 0 0" and hidden.
+**Focus ring, opt-in (2026-10-08, offline):** `focus_ring=1` in a layout brings the old Focus style back (a `14ffffff` fill
+and a 2 px `theme_accent_hi` outline on the touched control) for skins designed and checked with it: the 30 Stitch skins
+of saustin2010/vst_instruments, laid out so no control's slot overlaps its neighbours (a Live II, 2026-10-02 to 10-05).
 
 **Q-Links stuck on integer params (fixed in `wrapper/vst2_wrap.c`).** Symptom: a Q-Link on a 0..127 param flicked
 between two values on a slow turn and would not climb. Causes, in order: (1) the value went to the DSP as `%g` text
