@@ -45,9 +45,12 @@ static void step_tests(AEffect *a, int i, const char *kind, int span) {
     float mn = span;
     a->setP(a, i, 0);
     int ok = 1;
-    for (int k = 1; k <= 6; k++) {   /* data wheel: +0.01 from the read-back value */
+    /* data wheel: +0.01 from the read-back value, one step each on a range of up to 100 steps; on a longer one (a
+     * 0-5000 ms time) a click is 1/100 of the range, so it moves that far, rounded to whole steps */
+    const float click = span > 100 ? span * 0.01f : 1.0f, slack = span > 100 ? 1.0f : 0.05f;
+    for (int k = 1; k <= 6; k++) {
         a->setP(a, i, a->getP(a, i) + 0.01f);
-        if (fabsf(a->getP(a, i) * span - (k < span ? k : span)) > 0.05f) ok = 0;
+        if (fabsf(a->getP(a, i) * span - fminf(k * click, (float)span)) > k * slack) ok = 0;
     }
     CHECK(ok, "%s %s: six data wheel clicks step six (%.2f)", kind, key, a->getP(a, i) * span);
     if (span <= 64) {   /* a Q-Link event is 1/128 of the range: still one step each (opt-in counting is qlink_ticks) */
