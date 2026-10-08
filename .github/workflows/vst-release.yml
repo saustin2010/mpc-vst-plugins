@@ -22,6 +22,10 @@ on:
         description: This repo's commit - the same one as in the caller's uses:@ref
         type: string
         required: true
+      tools_repo:
+        description: Where the tools come from - this repo, or a fork whose changes are not merged yet (owner/name)
+        type: string
+        default: sd88me/mpc-vst-plugins
       vst_dir:
         description: The port's vst folder, relative to the caller's repo root; the build writes <vst_dir>/build
         type: string
@@ -96,7 +100,7 @@ jobs:
       - name: Check out mpc-vst-plugins (tools)
         uses: actions/checkout@v4
         with:
-          repository: sd88me/mpc-vst-plugins
+          repository: ${{ inputs.tools_repo }}
           ref: ${{ inputs.tools_ref }}
           path: mpc-vst-plugins
 
@@ -184,6 +188,7 @@ jobs:
           NAME: ${{ steps.pkg.outputs.name }}
           ABOUT: ${{ inputs.about }}
           TOOLS_REF: ${{ inputs.tools_ref }}
+          TOOLS_REPO: ${{ inputs.tools_repo }}
         run: |
           python3 - "$ZIP" > notes.md <<'PY'
           import os, re, sys, zipfile
@@ -197,6 +202,7 @@ jobs:
           PY
           printf '\n---\nBuilt by GitHub Actions from %s@%s with mpc-vst-plugins@%s.\n' \
             "$GITHUB_REPOSITORY" "${GITHUB_SHA::7}" "${TOOLS_REF::7}" >> notes.md
+          [ "$TOOLS_REPO" = sd88me/mpc-vst-plugins ] || printf 'Tools from the fork %s.\n' "$TOOLS_REPO" >> notes.md
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" "$ZIP" --clobber
             gh release edit "$TAG" --draft --target "$GITHUB_SHA" --title "$NAME VST v$VERSION" --notes-file notes.md
