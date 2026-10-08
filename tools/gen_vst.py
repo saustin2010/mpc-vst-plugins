@@ -90,7 +90,7 @@ def gen_params(cfg, params, out):
              "typedef struct { const char *key, *name, *unit; float min, max, def; int nopts; "
              "const char *const *opts; int momentary; int string_display; int int_display; "
              "int step_target; float step_delta; int popup_of; int hold_ms; int dynamic_name; int dynamic_display; "
-             "int qlink_ticks; int no_poll; int nudge_pct; int nudge_gain; } param_t;"]
+             "int qlink_ticks; int no_poll; int nudge_pct; int nudge_gain; const float *values; const char *const *send; } param_t;"]
     key_to_index = {p["key"]: i for i, p in enumerate(params)}
     rows = []
     for i, p in enumerate(params):
@@ -146,14 +146,30 @@ def gen_params(cfg, params, out):
             if isinstance(d, str):
                 d = opts.index(d) if d in opts else 0
             norm = d / (len(opts) - 1) if len(opts) > 1 else 0
-            rows.append("    {%s, %s, \"\", 0, 0, %s, %d, OPTS_%d, %d, %d, %d, %d, %s, %d, %d, %d, %d, %d, %d, %d, %d}," % (
+            # "values" -- what each option sends the DSP (and reads back) instead of its index, for a DSP that takes the
+            # value itself (e.g. a -2..2 octave range drawn as 32'/16'/8'/4'/2' switches).
+            vals = p.get("values")
+            if vals:
+                if len(vals) != len(opts):
+                    raise SystemExit("%s: %d values for %d options" % (p["key"], len(vals), len(opts)))
+                lines.append("static const float VALS_%d[] = {%s};" % (i, ", ".join(fl(v) for v in vals)))
+            # "send" -- the word each option sends the DSP (and reads back) instead of its index, for a DSP that only
+            # parses its own option words (Schwung's Eucalypso and Super Arp: strcmp(val, "natural_minor")), so the
+            # labels shown ("options") can differ from them.
+            send = p.get("send")
+            if send:
+                if len(send) != len(opts):
+                    raise SystemExit("%s: %d send strings for %d options" % (p["key"], len(send), len(opts)))
+                lines.append("static const char *const SEND_%d[] = {%s};" % (i, ", ".join(c_str(o) for o in send)))
+            rows.append("    {%s, %s, \"\", 0, 0, %s, %d, OPTS_%d, %d, %d, %d, %d, %s, %d, %d, %d, %d, %d, %d, %d, %d, %s, %s}," % (
                 c_str(p["key"]), name, fl(norm), len(opts), i, bool(p.get("momentary")), is_str, is_int,
-                step_target, fl(step_delta), popup_of, p.get("hold_ms", 0), dyn, dyn_disp, qticks, no_poll, nudge, ngain))
+                step_target, fl(step_delta), popup_of, p.get("hold_ms", 0), dyn, dyn_disp, qticks, no_poll, nudge, ngain,
+                "VALS_%d" % i if vals else "0", "SEND_%d" % i if send else "0"))
         else:
             lo, hi = p.get("min", 0), p.get("max", 1)
             d = p.get("default", lo)
             norm = (d - lo) / (hi - lo) if hi > lo else 0
-            rows.append("    {%s, %s, %s, %s, %s, %s, 0, 0, %d, %d, %d, %d, %s, %d, %d, %d, %d, %d, %d, %d, %d}," % (
+            rows.append("    {%s, %s, %s, %s, %s, %s, 0, 0, %d, %d, %d, %d, %s, %d, %d, %d, %d, %d, %d, %d, %d, 0, 0}," % (
                 c_str(p["key"]), name, c_str(p.get("unit", "")), fl(lo), fl(hi), fl(norm),
                 bool(p.get("momentary")), is_str, is_int, step_target, fl(step_delta), popup_of, p.get("hold_ms", 0), dyn, dyn_disp,
                 qticks, no_poll, nudge, ngain))
@@ -174,12 +190,15 @@ def preset_value(p, v, where):
     an option's index, a whole number, or a number in the parameter's own units)."""
     opts = [str(o) for o in p.get("options") or []]
     if opts:
+        idx = None
         if isinstance(v, str) and v in opts:
-            return str(opts.index(v))
-        if isinstance(v, str) and v.lower() in [o.lower() for o in opts]:
-            return str([o.lower() for o in opts].index(v.lower()))
-        if isinstance(v, int) and not isinstance(v, bool) and 0 <= v < len(opts):
-            return str(v)
+            idx = opts.index(v)
+        elif isinstance(v, str) and v.lower() in [o.lower() for o in opts]:
+            idx = [o.lower() for o in opts].index(v.lower())
+        elif isinstance(v, int) and not isinstance(v, bool) and 0 <= v < len(opts):
+            idx = v
+        if idx is not None:   # what the wrapper sends for that option: its value, its word, or its index
+            return "%g" % p["values"][idx] if p.get("values") else str(p["send"][idx]) if p.get("send") else str(idx)
         raise SystemExit("%s: %s=%r is not one of %s" % (where, p["key"], v, ",".join(opts)))
     if isinstance(v, bool) or not isinstance(v, (int, float)):
         raise SystemExit("%s: %s=%r is not a number" % (where, p["key"], v))

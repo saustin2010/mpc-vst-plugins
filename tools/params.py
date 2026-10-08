@@ -1,7 +1,8 @@
 """A port's parameter list, the input to gen_vst.py and the skin studio.
 
 Generic format (params.json): {"name": "...", "params": [...], "sections": [{"label": "...", "keys": [...]}]}
-or just the list. Each param: key, name, and either min/max (+ unit) or options; optional default,
+or just the list. Each param: key, name, and either min/max (+ unit) or options (+ optional "values": the number
+each option sends the DSP instead of its index, or "send": the word it sends); optional default,
 momentary (a trigger that reports back to 0), display ("string" | "int"), step_of/step_delta, type
 (the studio's widget hint: readout, stepper, trigger, slot). The list order is the VST parameter index.
 

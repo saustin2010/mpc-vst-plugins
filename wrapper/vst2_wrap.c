@@ -177,22 +177,37 @@ static void eng_process(wrap_t *w, const int16_t *in, int16_t *out, int n) {
 
 static float clamp01(float v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
 
-/* normalized 0..1 -> DSP display value string */
+/* normalized 0..1 -> DSP display value string. An option sends its index, or its own value when the port gives
+ * "values" (e.g. a -2..2 range drawn as 32'..2' switches), or the DSP's own word for it when the port gives "send". */
 static void norm_to_str(const param_t *p, float n, char *buf, int len) {
-    if (p->nopts) snprintf(buf, len, "%d", (int)lroundf(clamp01(n) * (p->nopts - 1)));
+    if (p->nopts) {
+        int idx = (int)lroundf(clamp01(n) * (p->nopts - 1));
+        if (p->values) snprintf(buf, len, "%g", p->values[idx]);
+        else if (p->send) snprintf(buf, len, "%s", p->send[idx]);
+        else snprintf(buf, len, "%d", idx);
+    }
     else if (p->int_display) snprintf(buf, len, "%ld", lroundf(p->min + (p->max - p->min) * clamp01(n)));   /* round: a bare %g + atoi() truncates, so a sub-step Q-Link nudge never advances */
     else snprintf(buf, len, "%g", p->min + (p->max - p->min) * clamp01(n));
 }
 
 /* DSP display value string (number or enum label) -> normalized 0..1 */
 static float str_to_norm(const param_t *p, const char *s) {
+    if (p->nopts && p->values) {   /* the DSP reports the value itself: the nearest option's */
+        float v = (float)atof(s), best = 1e30f;
+        int idx = 0;
+        for (int i = 0; i < p->nopts; i++)
+            if (fabsf(p->values[i] - v) < best) { best = fabsf(p->values[i] - v); idx = i; }
+        return p->nopts > 1 ? (float)idx / (p->nopts - 1) : 0;
+    }
     if (p->nopts) {
         int idx = -1;
-        if (isdigit((unsigned char)s[0])) idx = atoi(s);
-        else
-            for (int i = 0; i < p->nopts; i++)
-                if (!strcasecmp(s, p->opts[i])) idx = i;
+        for (int i = 0; p->send && i < p->nopts && idx < 0; i++)   /* the DSP's own word for the option */
+            if (!strcasecmp(s, p->send[i])) idx = i;
+        for (int i = 0; i < p->nopts && idx < 0; i++)   /* the option's own text first: "8'" is a label, not index 8 */
+            if (!strcasecmp(s, p->opts[i])) idx = i;
+        if (idx < 0 && isdigit((unsigned char)s[0])) idx = atoi(s);
         if (idx < 0) idx = 0;
+        if (idx > p->nopts - 1) idx = p->nopts - 1;   /* an engine reporting past its option list must not index past ours */
         return p->nopts > 1 ? (float)idx / (p->nopts - 1) : 0;
     }
     return p->max > p->min ? clamp01((float)((atof(s) - p->min) / (p->max - p->min))) : 0;
