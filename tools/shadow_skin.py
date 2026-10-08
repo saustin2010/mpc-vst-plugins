@@ -63,7 +63,8 @@ text width, e.g. narrower than the usual 130 px where neighbours sit close and t
 knob's picture at the left of a bw x bh box (default 4 knobs wide), its value (vs= px, default 30) in the rest, no name.
 Toggles take
 `bw=` and `ns=0` too (other ns= sizes are not used on toggles); enum_v takes `sh=` like enum_h.
-Any widget line (frames too) can end in `when=<param>:<option>` (option name or index): it is shown only
+Any widget line (frames too) can end in `when=<param>:<option>` (option name or index), or for a continuous
+parameter `when=<param>:<i>/<N>` (band i of N of its range, e.g. an envelope drawing per sustain level): it is shown only
 while that option parameter is at that option (MPC's IndexedEnabling), so a tab can swap control sets per
 mode. Its baked parts (frame, title, text boxes, group labels) go into a per-mode image over the background.
 Top level: `qlinks_track = key,...` sets the Q-Links used outside page-follow mode (default: page 1's).
@@ -706,6 +707,11 @@ def build(layout_path, params, skin_dir, art_bin, png_from_ppm):
         if not w.get("when"):
             return None
         k, _, o = w["when"].partition(":")
+        if "/" in o and k in index:   # when=<param>:<i>/<N>: band i of N of a continuous parameter's range
+            bi, bn = (int(x) for x in o.split("/"))
+            if not 0 <= bi < bn:
+                raise SystemExit("layout: when=%s: band %d of %d" % (w["when"], bi, bn))
+            return "IndexedEnabling/%d/%d/Parameter %d" % (bi, bn, index[k])
         opts = [str(x).lower() for x in (params[index[k]].get("options") or [])] if k in index else []
         if len(opts) < 2:
             raise SystemExit("layout: when=%s: %r is not an option parameter" % (w["when"], k))

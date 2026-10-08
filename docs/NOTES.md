@@ -433,6 +433,11 @@ are drawn into a per-mode image, the page background redrawn with that mode's pa
 over the base background (which leaves them out). A popup's list itself isn't tagged, so a list left open
 while the mode changes stays open until a pick.
 
+**A continuous parameter in bands (a Live II, 2026-10-02, saustin2010/vst_instruments' envelope displays):** the same
+handle works on a knob's continuous range read as N bands, so `when=<param>:<i>/<N>` in a layout shows a part only
+while the parameter is in band i of N (Hera's and OB-Xd's decay and release filmstrips, one per sustain band, so the
+curve meets the sustain line). The displays follow their knobs and a preset change.
+
 ## Browser-rendered artwork (verified on a Force 2026-09-25, "Maze Skin Test")
 `tools/html_art.py` takes shadow_art.c's stdin commands and draws them as SVG in headless Chromium (Playwright
 1.47, `tools/html_art/Dockerfile`), so the layout and skin builder are unchanged. Maze Voice's whole skin renders
