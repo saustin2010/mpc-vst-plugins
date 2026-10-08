@@ -27,3 +27,9 @@ typedef struct {
 } mpc_engine_t;
 
 const mpc_engine_t *mpc_engine(void);
+
+/* Optional: an engine that follows the host transport (a MIDI sequencer clocked from the host) defines this; the wrapper
+ * calls it once per host buffer, before rendering it, with the tempo (BPM, 0 if unknown), the song position in quarter
+ * notes at the start of the buffer (<0 if unknown) and whether the transport is playing. Weak: engines that don't define
+ * it are unaffected, and HAS_TRANSPORT / HAS_LFO_BPM (vst2_wrap.c) still work alongside it. */
+void mpc_engine_transport(void *inst, double bpm, double ppq, int playing) __attribute__((weak));

@@ -437,6 +437,15 @@ static void render_events(wrap_t *w, float **out, int32_t n, int accumulate) {
 static void housekeeping(AEffect *e, int32_t n) {
     wrap_t *w = e->object;
     if (HAS_LFO_BPM || HAS_TRANSPORT) update_tempo(w);
+    if (mpc_engine_transport) {   /* an engine that follows the transport (engine.h): tempo, position, play, each buffer */
+        VstTimeInfo *ti = (VstTimeInfo *)w->master(&w->fx, audioMasterGetTime, 0, kVstTempoValid | kVstPpqPosValid, 0, 0);
+        if (ti) {
+            pthread_mutex_lock(&w->lock);
+            mpc_engine_transport(w->dsp, (ti->flags & kVstTempoValid) ? ti->tempo : 0,
+                                 (ti->flags & kVstPpqPosValid) ? ti->ppqPos : -1, (ti->flags & kVstTransportPlaying) != 0);
+            pthread_mutex_unlock(&w->lock);
+        }
+    }
     /* A trigger param (e.g. Generate) fired: tell the host it is back to 0 so
      * buttons bound to it drop their highlight. Done here, not inside
      * setParameter, so the host is not re-entered from its own call. */
