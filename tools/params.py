@@ -30,9 +30,13 @@ def load(path):
 
 
 def source(cfg):
-    """vst.json -> (params file path relative to it, adapter name or None)"""
+    """vst.json -> (params file path relative to it, adapter name or None)
+
+    A "module" names an adapter engine (schwung). Its parameter list normally comes from the module.json, but a port
+    may give a hand-made "params" file beside "module" to override it (types, ranges, options and names the
+    module.json doesn't carry, e.g. OB-Xd's bare keys). The adapter is linked either way."""
+    if cfg.get("module"):
+        return cfg.get("params") or cfg["module"], "schwung"
     if cfg.get("params"):
         return cfg["params"], None
-    if cfg.get("module"):
-        return cfg["module"], "schwung"
     raise SystemExit('vst.json: needs "params" (or an adapter\'s source, e.g. "module")')
