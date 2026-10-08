@@ -648,6 +648,11 @@ was never needed to fix it; still, the outline is only checked on an MPC One, so
 **Focus ring, opt-in (2026-10-08, offline):** `focus_ring=1` in a layout brings the old Focus style back (a `14ffffff` fill
 and a 2 px `theme_accent_hi` outline on the touched control) for skins designed and checked with it: the 30 Stitch skins
 of saustin2010/vst_instruments, laid out so no control's slot overlaps its neighbours (a Live II, 2026-10-02 to 10-05).
+**Column outlines by slot, opt-in (2026-10-08, offline; the same boxes checked on a Live II 2026-10-02 to 10-05):**
+`qlink_box=slot` (with `qlink_bounds=column`) measures each column's outline by its controls' whole slots: a knob's 130 px
+box down to its value text, sliders at least 130 px wide, `lay=side` knobs by their box. Trigger buttons are left out (a
+GENERATE shared across panels stretched a box over the next column), and `qbox=no` on a control keeps it out of its
+column's box (a control placed away from the rest of its column). The default boxes are tighter (the knob's ring).
 
 **Q-Links stuck on integer params (fixed in `wrapper/vst2_wrap.c`).** Symptom: a Q-Link on a 0..127 param flicked
 between two values on a slow turn and would not climb. Causes, in order: (1) the value went to the DSP as `%g` text

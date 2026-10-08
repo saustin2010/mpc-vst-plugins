@@ -69,7 +69,9 @@ mode. Its baked parts (frame, title, text boxes, group labels) go into a per-mod
 Top level: `qlinks_track = key,...` sets the Q-Links used outside page-follow mode (default: page 1's).
 `qlink_bounds=column` outlines the controls of the Q-Link column in use, as stock skins do (checked on an MPC One
 only; default: no outline). `focus_ring=1` tints the touched control and outlines it in theme_accent_hi (MPC's Focus
-component; the default since 2026-09-26 draws nothing).
+component; the default since 2026-09-26 draws nothing). `qlink_box=slot` sizes those column outlines by each control's whole
+slot (a knob's 130 px box with its name and value text), leaves trigger buttons out, and skips a control with `qbox=no`
+(one placed away from the rest of its column), so neighbouring columns' boxes don't overlap.
 Top-level `style=` / `theme_<name>=RRGGBB` lines are the shadow_page.conf ones; `color=` on a
 button overrides its fill. `art_css=skin.css` restyles the browser renderer's artwork (tools/html_art.py).
 
@@ -97,6 +99,7 @@ DISPLAY_INK = "cdeb63"   # theme_display_ink: live-text colour over a dotreadout
 TD3 = False   # style=td3: frames are filled boxes, so widget crops sit on BOX, not the page bg
 QLINK_COLUMNS = False   # qlink_bounds=column: per-column Q-Link outlines (qlink_column_bounds)
 FOCUS_RING = False      # focus_ring=1: the touched control gets a light tint and an accent_hi outline (_focus)
+QLINK_BOX_SLOT = False  # qlink_box=slot: column outlines measured by the controls' whole slots (slot_bounds)
 LABEL_SCALE = 1.0   # label_scale=<n>: scales knob/toggle/pill name+value live-text size and their boxes
 FRAMES = 128               # filmstrip frames emitted by (l)sstrip / (l)strip
 ROT_FRAMES = FRAMES - 1     # rotary knob FilmStrip: a rotation reads one fewer than the strip length
@@ -207,6 +210,7 @@ def apply_theme(top):
     g["LOOK_DEFAULTS"] = skin_assets.defaults(top)
     g["QLINK_COLUMNS"] = False
     g["FOCUS_RING"] = False
+    g["QLINK_BOX_SLOT"] = False
     for line in top:
         if line.strip() == "style=td3":
             g["TD3"] = True
@@ -218,6 +222,9 @@ def apply_theme(top):
             continue
         if line.startswith("qlink_bounds="):
             g["QLINK_COLUMNS"] = line[len("qlink_bounds="):].strip() == "column"
+            continue
+        if line.startswith("qlink_box="):
+            g["QLINK_BOX_SLOT"] = line[len("qlink_box="):].strip() == "slot"
             continue
         if line.startswith("focus_ring="):
             g["FOCUS_RING"] = line[len("focus_ring="):].strip() not in ("", "0", "no", "off")
@@ -1244,10 +1251,71 @@ def qlink_column_bounds(tab, keys, base_dir="."):
     1-4 are column 1, 5-8 column 2, ... (qlink_for_slot), and MPC outlines the column the Q-Links currently drive --
     on an MPC One each press of the Q-Link button moves to the next one. A single rectangle around all 16 left MPC
     outlining the wrong area. An empty column in the middle gets an empty rectangle; trailing ones are left out."""
-    rects = [qlink_bounds(tab, [k for k in keys[c * 4:c * 4 + 4] if k != "-"], base_dir) for c in range(4)]
+    if QLINK_BOX_SLOT:
+        out = set(w.get("key") for w in tab["widgets"] if str(w.get("qbox", "")).lower() in ("no", "0", "off"))
+        cols = [set(keys[c * 4:c * 4 + 4]) - out - {"-"} for c in range(4)]
+        rects = [slot_bounds(tab, c) if any(_drives(tab, k) for k in c) else None for c in cols]
+    else:
+        rects = [qlink_bounds(tab, [k for k in keys[c * 4:c * 4 + 4] if k != "-"], base_dir) for c in range(4)]
     while rects and rects[-1] is None:
         rects.pop()
     return [r or "0 0 0 0" for r in rects]
+
+
+def _drives(tab, key):
+    """Does the page show a control for this key that takes a column outline (not a meter or a bare button)?"""
+    for w in tab["widgets"]:
+        if w["kind"] == "list":
+            if key in list_keys(w):
+                return True
+        elif w.get("key") == key and w["kind"] not in ("button", "meter"):
+            return True
+    return False
+
+
+def slot_bounds(tab, keys):
+    """qlink_box=slot: the rectangle around the whole slots of the controls in keys (plugin coords): a knob's 130 px
+    box down to its value text, a slider's 130 px column, a side knob's box, a toggle's box; buttons and meters left
+    out, so a trigger shared across panels doesn't stretch the box over another column's (checked on a Live II with
+    30 skins, 2026-10-02 to 10-05)."""
+    xs, ys = [], []
+    for w in tab["widgets"]:
+        if w["kind"] == "list":
+            for (x, y, tw, th), k in zip(list_tiles(w), list_keys(w)):
+                if k in keys:
+                    xs += [x, x + tw]
+                    ys += [y, y + th]
+            continue
+        if w.get("key") not in keys or w["kind"] in ("button", "meter"):
+            continue
+        if w["kind"] in ("slider_v", "slider_h"):
+            xs += [w["cx"] - max(65, w["w"] // 2), w["cx"] + max(65, w["w"] // 2)]
+            ys += [w["cy"] - w["h"] // 2, w["cy"] + w["h"] // 2 + 56]
+        elif w["kind"] in ("readout", "stepper", "menu", "popup"):
+            xs += [w["cx"] - w["w"] // 2, w["cx"] + w["w"] // 2]
+            ys += [w["cy"] - w["h"] // 2 - 26, w["cy"] + w["h"] // 2]
+        elif w["kind"] == "knob" and w.get("lay") == "side":
+            bw, bh = w.get("bw") or 4 * (2 * w["r"] + 10), w.get("bh") or 2 * w["r"] + 10
+            xs += [w["cx"] - bw // 2, w["cx"] + bw // 2]
+            ys += [w["cy"] - bh // 2, w["cy"] + bh // 2]
+        elif w["kind"] == "knob":
+            xs += [w["cx"] - 65, w["cx"] + 65]
+            ys += [w["cy"] - w["r"] - 8, w["cy"] + w["r"] + 56]
+        elif w["kind"] == "toggle" and w.get("ns") == 0 and w.get("w") and w.get("h"):   # a picture, no name
+            xs += [w["cx"] - w["w"] // 2, w["cx"] + w["w"] // 2]
+            ys += [w["cy"] - w["h"] // 2, w["cy"] + w["h"] // 2]
+        elif w["kind"] == "toggle":
+            half = (w.get("bw") or 120) // 2
+            xs += [w["cx"] - half, w["cx"] + half]
+            ys += [w["cy"] - 18, w["cy"] + 38]
+        else:
+            for x, y, sw, sh in seg_rects(w):
+                xs += [x, x + sw]
+                ys += [y - 40, y + sh]
+    if not xs:
+        return None
+    x0, y0 = max(0, min(xs) - 6), max(0, min(ys) - Y_OFF - 6)
+    return "%d %d %d %d" % (x0, y0, min(W, max(xs) + 6) - x0, min(H, max(ys) - Y_OFF + 6) - y0)
 
 
 def qlink_bounds(tab, keys, base_dir="."):
