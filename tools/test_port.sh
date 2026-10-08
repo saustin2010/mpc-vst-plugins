@@ -2,8 +2,8 @@
 # Offline x86 test of a port, before anything goes to a device:
 #   tools/test_port.sh path/to/vst.json
 # Generates the port's params.h, builds tools/host_test.c with the wrapper, the port's sources and its
-# adapter under ASan/UBSan, and runs it (exit status = the test's). Uses the host gcc/g++ when present,
-# else the gcc:12 Docker image. Ports with their own hand-written wrapper have their own host test.
+# adapter under ASan/UBSan, and runs it (exit status = the test's). Uses the host gcc/g++ on Linux,
+# else (and always on macOS) the gcc:12 Docker image. Ports with their own hand-written wrapper have their own host test.
 set -euo pipefail
 MV="$(cd "$(dirname "$0")/.." && pwd)"
 CFG="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
@@ -34,10 +34,15 @@ build='
 '
 export SOURCES CFLAGS PORT LIBS SAN MV ADAPTER_SRC OUT
 cd "$ROOT"
-if command -v gcc >/dev/null && command -v g++ >/dev/null; then
+# macOS: Apple clang's ASan runtime spins forever in its own startup (InitializeShadowMemory walking
+# the dyld shared cache) on macOS 26, before main() runs, so use the Linux container there.
+if [ "$(uname)" != Darwin ] && command -v gcc >/dev/null && command -v g++ >/dev/null; then
   bash -c "$build"
   "$OUT"
 else
-  docker run --rm -u "$(id -u):$(id -g)" -v "$ROOT":"$ROOT" -v "$MV":"$MV":ro -w "$ROOT" \
-    -e SOURCES -e CFLAGS -e PORT -e LIBS -e SAN -e MV -e ADAPTER_SRC -e OUT gcc:12 bash -c "$build && \"\$OUT\""
+  # TEST_DOCKER_ARGS: extra docker run arguments, e.g. "-v <port>/data:/sdcard/vst/<port>:ro" so an engine that
+  # loads presets from its MODULE_DIR finds them in the container too.
+  # shellcheck disable=SC2086
+  docker run --rm -u "$(id -u):$(id -g)" -v "$ROOT":"$ROOT" -v "$MV":"$MV":ro -w "$ROOT" ${TEST_DOCKER_ARGS:-} \
+    -e SOURCES -e CFLAGS -e PORT -e LIBS -e SAN -e MV -e ADAPTER_SRC -e OUT gcc:12 bash -c "$build"'"$OUT"'   # $build ends in a newline and runs under set -e
 fi
