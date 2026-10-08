@@ -10,6 +10,9 @@
 #include <math.h>
 #include <pthread.h>
 #include "params.h"
+#ifndef TEST_CLAMPED   /* gen_vst.py: params the engine limits to what it has loaded ("clamped") */
+#define TEST_CLAMPED ",,"
+#endif
 typedef struct AEffect AEffect;
 typedef intptr_t (*cb)(AEffect*,int32_t,int32_t,intptr_t,void*,float);
 struct AEffect { int32_t magic; intptr_t (*d)(AEffect*,int32_t,int32_t,intptr_t,void*,float);
@@ -286,6 +289,9 @@ int main(void) {
     int cont = -1, en = -1, pop = -1;
     for (int i = 0; i < NPARAMS; i++) {
         const param_t *p = &PARAMS[i];
+        char ck[96];
+        snprintf(ck, sizeof ck, ",%s,", p->key);
+        if (strstr(TEST_CLAMPED, ck)) continue;   /* "clamped": the engine holds it to what it has loaded */
         if (cont < 0 && !p->nopts && !p->momentary && !p->string_display && p->step_target < 0 && p->max > p->min) cont = i;
         if (en < 0 && p->nopts > 2 && !p->momentary && p->popup_of < 0) en = i;
         if (pop < 0 && p->popup_of >= 0) pop = i;
@@ -372,8 +378,12 @@ int main(void) {
         a->setP(a, i, p->def);
         break;
     }
-    for (int i = 0; i < NPARAMS; i++)   /* the first whole-number param */
+    for (int i = 0; i < NPARAMS; i++) {   /* the first whole-number param */
+        char ck[96];
+        snprintf(ck, sizeof ck, ",%s,", PARAMS[i].key);
+        if (strstr(TEST_CLAMPED, ck)) continue;
         if (!PARAMS[i].nopts && PARAMS[i].int_display && PARAMS[i].qlink_ticks <= 1 && PARAMS[i].max - PARAMS[i].min >= 2) { step_tests(a, i, "int", (int)(PARAMS[i].max - PARAMS[i].min)); break; }
+    }
     if (pop >= 0) {
         int t = PARAMS[pop].popup_of, n = PARAMS[t].nopts;
         a->setP(a, pop, 1); CHECK(a->getP(a, pop) > 0.5f, "popup %s opens", PARAMS[pop].key);

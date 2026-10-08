@@ -177,6 +177,9 @@ def gen_params(cfg, params, out):
               "#define PLUG_NAME %s" % c_str(cfg["name"]), "#define PLUG_VENDOR %s" % c_str(cfg["vendor"]),
               "#define PLUG_UID 0x%08x /* '%s' */" % (int.from_bytes(cfg["uid"].encode(), "big"), cfg["uid"]),
               "#define PLUG_VERSION %d" % cfg.get("version", 1000)]
+    # "clamped": the engine limits this value to what it has loaded (a file, pattern or track number), so setting it
+    # needn't read back the same: tools/host_test.c doesn't pick it for its round-trip checks.
+    lines.append("#define TEST_CLAMPED %s" % c_str("," + ",".join(p["key"] for p in params if p.get("clamped")) + ","))
     lines += ["#define %s %s" % (k, v) for k, v in cfg.get("defines", {}).items()]
     if cfg.get("effect"):
         lines.append("#define PLUG_EFFECT 1")
