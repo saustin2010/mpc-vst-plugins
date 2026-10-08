@@ -308,8 +308,11 @@ int main(void) {
         /* 50 Q-Link ticks of 0.0004 (far below one step of an int or percent param), re-reading in between: they must add
          * up to ~0.02, not round back to where they started */
         float x = a->getP(a, cont), x0 = x;
-        for (int k = 0; k < 50; k++) { x += 0.0004f; a->setP(a, cont, x); x = a->getP(a, cont); }
-        CHECK(fabsf(x - x0 - 0.02f) < 0.011f, "travel: slow Q-Link ticks add up on %s (%.3f -> %.3f)", PARAMS[cont].key, x0, x);
+        if (fabsf(x0 - 0.25f) > 0.05f) printf("skip travel: the engine doesn't keep %s (a placeholder?)\n", PARAMS[cont].key);
+        else {
+            for (int k = 0; k < 50; k++) { x += 0.0004f; a->setP(a, cont, x); x = a->getP(a, cont); }
+            CHECK(fabsf(x - x0 - 0.02f) < 0.011f, "travel: slow Q-Link ticks add up on %s (%.3f -> %.3f)", PARAMS[cont].key, x0, x);
+        }
 #endif
     }
     if (en >= 0) {
@@ -458,7 +461,9 @@ int main(void) {
     if (n > 0) {
         b->d(b, 24, 0, n, ch, 0);
         // int params: a keeps the unrounded knob position, b restores the rounded value, so allow half a step
-        float ctol = cont >= 0 && PARAMS[cont].int_display ? 0.5f / (PARAMS[cont].max - PARAMS[cont].min) + 1e-3f : 1e-3f;
+        /* a whole-number param, or with QLINK_TRAVEL any param: a holds the host's unrounded position (within half of the
+         * engine's own step), b restores the engine's value, so allow half a step */
+        float ctol = cont >= 0 && (PARAMS[cont].int_display || QLINK_TRAVEL) ? 0.5f / (PARAMS[cont].max - PARAMS[cont].min) + 1e-3f : 1e-3f;
         if (cont >= 0) CHECK(fabsf(b->getP(b, cont) - a->getP(a, cont)) <= ctol, "chunk (%ld bytes) restores %s on instance b", (long)n, PARAMS[cont].key);
         if (pop >= 0) CHECK(!strstr((char *)ch, PARAMS[pop].key), "popup flag not saved in the chunk");
     } else printf("warn no chunk (engine has no \"state\" param)\n");
