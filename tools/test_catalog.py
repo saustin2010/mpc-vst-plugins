@@ -981,6 +981,27 @@ class InstallerTest(Base):
     def legacy(self, *parts):
         return os.path.join(self.legacy_root, "sdcard", "vst", *parts)
 
+    def test_a_name_with_brackets_installs(self):
+        """A plugin-list name like "[SYN] Test Synth" (a kind tag) puts brackets in the folder and file= path: the check
+        after the settings edit must read them as text, not as a grep bracket expression (it refused every such install)."""
+        t, skin_name = self.tmp, "Acme - VST - [SYN] Test Synth"
+        skin = os.path.join(t, skin_name)
+        os.makedirs(os.path.join(skin, "Plugin Skins"))
+        open(os.path.join(skin, "version.xml"), "w").write("<v/>")
+        open(os.path.join(skin, "Plugin Skins", "TUI.json"), "w").write("{}")
+        open(os.path.join(t, "entry2.xml"), "w").write(ENTRY.replace('name="Test Synth"', 'name="[SYN] Test Synth"'))
+        out = os.path.join(t, "dist2")
+        subprocess.check_call([sys.executable, os.path.join(HERE, "release.py"), "--so", os.path.join(t, "test_synth.so"),
+                               "--skin", skin, "--entry", os.path.join(t, "entry2.xml"), "--version", "1.0.0",
+                               "--repo", "acme/test-synth", "--license", "MIT", "-o", out], stdout=subprocess.DEVNULL)
+        with zipfile.ZipFile(os.path.join(out, os.listdir(out)[0])) as zf:
+            zf.extractall(os.path.join(t, "pkg2"))
+        self.top = os.path.join(t, "pkg2", os.listdir(os.path.join(t, "pkg2"))[0])
+        r = self.run_script("install.sh")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.entries()["[SYN] Test Synth"], os.path.join(self.synths, skin_name, "test_synth.so"))
+        self.assertFalse(os.path.exists(os.path.join(self.legacy_root, "sdcard", "vst", "test_synth.so")))   # the old copy
+
     def test_legacy_user_files_are_moved_and_packaged_data_removed(self):
         os.makedirs(self.legacy("roms")); open(self.legacy("roms", "mine.rom"), "w").write("my rom")      # user data, only there
         os.makedirs(self.legacy("banks")); open(self.legacy("banks", "mine.syx"), "w").write("my bank")   # user data next to shipped data

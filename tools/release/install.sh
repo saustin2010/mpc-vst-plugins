@@ -42,7 +42,7 @@ MP=$(df -kP "$SYNTHS" 2>/dev/null | awk 'NR==2 {m = $6; for (i = 7; i <= NF; i++
 if [ -n "$MP" ] && MP="$MP" awk '$2 == ENVIRON["MP"] {print $4}' /proc/mounts 2>/dev/null | grep -q '\(^\|,\)noexec\(,\|$\)'; then
     echo "warning: $SYNTHS is on a noexec mount, so MPC will not be able to load this plugin from it. Install on the internal drive or an SD card (-t /sdcard/Synths)."
 fi
-grep -q "$SYNTHS" "$SETTINGS" || echo "warning: $SYNTHS isn't in MPC's SynthContentLocations; the skin may not show"
+grep -qF "$SYNTHS" "$SETTINGS" || echo "warning: $SYNTHS isn't in MPC's SynthContentLocations; the skin may not show"
 
 echo "Installing $NAME @VERSION@:"
 echo "  $SYNTHS/$SKIN/ (skin, $SO and its data), and an entry in $SETTINGS"
@@ -109,7 +109,7 @@ cp "$SETTINGS" "$BAK"
 sed "s|%payload-path%|$SYNTHS_SED|g" "portable/$SKIN/plugin-meta.xml" > "$SETTINGS.entry"
 awk -v mode=add -v file="$FILE" -v alt="$LEGACY_SO" -v uid="$UID_HEX" -v entryfile="$SETTINGS.entry" -f plugin_list.awk "$SETTINGS" > "$SETTINGS.new"
 rm -f "$SETTINGS.entry"
-n=$(grep -c "file=\"$FILE\"" "$SETTINGS.new" || true)
+n=$(grep -cF "file=\"$FILE\"" "$SETTINGS.new" || true)   # -F: a name like "[SYN] 303" is text, not a bracket expression
 u=$(grep -c " uid=\"$UID_HEX\"" "$SETTINGS.new" || true)
 [ "$n" = 1 ] && [ "$u" = 1 ] || { rm -f "$SETTINGS.new"; die "settings edit failed (entries: $n by file, $u by uid); MPC.settings unchanged"; }
 # without python3 (it may be absent on the device) at least make sure the file still has its root element
