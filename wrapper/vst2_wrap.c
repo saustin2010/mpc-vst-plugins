@@ -57,6 +57,16 @@ void wrap_trace(int kind, int idx, float value);
 #define HAS_TRANSPORT 0 /* 1: tell the DSP when the host transport plays/stops as "transport" = "1"/"0"; a jump back
                           * in song position while playing (a loop, a locate) is sent as "1" again */
 #endif
+#ifndef QLINK_TRAVEL
+#define QLINK_TRAVEL 0 /* 1 (vst.json "defines"): stepped controls move by travel, like a detented knob, instead of a step per
+                        * event (settle()): the host's unrounded position is kept and handed back (shadow[]), so Q-Link and
+                        * data-wheel ticks add up, and an option changes once the turn has crossed half an option's width.
+                        * Continuous and whole-number params keep their position between the engine's own steps too. */
+#endif
+#ifndef SET_IF_CHANGED
+#define SET_IF_CHANGED 0 /* 1: a set to the value the engine already reports is skipped (triggers always go through), for
+                          * an engine that reloads on any set (Wurl's preset re-applied its patch over a host restore) */
+#endif
 #ifndef MODULE_DIR
 #define MODULE_DIR NULL /* set via vst.json "defines" for a DSP that reads its own files
                           * (ROMs, etc.) from "<module_dir>/..." (see jv880's create_instance) */
@@ -144,6 +154,7 @@ typedef struct {
     volatile char cc_changed[NPARAMS];   /* set from MIDI CC/NRPN, reported to the host at most every 1024 frames */
     int cc_report;           /* frames until CC-driven changes are reported again */
     int program;             /* NPRESETS: the preset last picked (not in the engine's state; 0 after a reload) */
+    float shadow[NPARAMS];   /* QLINK_TRAVEL: the host's unrounded position on a stepped param; <0 = none (get_norm) */
     int nprog;               /* PROG_PARAM: programs listed (the range, or the engine's own count: program_count) */
     char (*prog)[25];        /* PROG_NAME_PARAM: names read at creation (program_names); NULL: named on demand */
 #if SAMPLE_ACCURATE
@@ -226,7 +237,27 @@ static float get_norm(wrap_t *w, int i) {
         if (eng_get(w, k2, buf, sizeof buf) > 0) return atoi(buf) ? 1.0f : 0.0f;
     }
     if (eng_get(w, PARAMS[i].key, buf, sizeof buf) <= 0) return PARAMS[i].def;
-    return str_to_norm(&PARAMS[i], buf);
+    float v = str_to_norm(&PARAMS[i], buf);
+#if QLINK_TRAVEL
+    /* While the engine still holds the step the host's last position gives, hand back that position, so the next tick
+     * adds to it instead of rounding back to where it started; drop it once something else changes the value. A step is
+     * one option, one whole unit for an int param, else the engine's own resolution (the decimals it reports). */
+    const param_t *p = &PARAMS[i];
+    if (w->shadow[i] >= 0 && (p->nopts > 1 || p->max > p->min)) {
+        float half;
+        if (p->nopts > 1) half = 0.5f / (p->nopts - 1);
+        else {
+            const char *dot = strchr(buf, '.');
+            int dec = 0;
+            if (dot && !p->int_display)
+                for (const char *c = dot + 1; isdigit((unsigned char)*c) && dec < 6; c++) dec++;
+            half = 0.5f * powf(10.0f, (float)-dec) / (p->max - p->min);
+        }
+        if (fabsf(v - w->shadow[i]) <= half + 1e-4f) return w->shadow[i];
+        w->shadow[i] = -1;
+    }
+#endif
+    return v;
 }
 
 /* Where a param that moves in whole steps (an option list, a whole-number value) lands, in steps from its minimum.
@@ -270,6 +301,9 @@ static void setParameter(AEffect *e, int32_t i, float n) {
                 norm_to_str(tp, (float)idx / (tp->nopts - 1), buf, sizeof buf);
                 eng_set(w, tp->key, buf);
                 w->changed[p->step_target] = 1;
+#if QLINK_TRAVEL
+                w->shadow[p->step_target] = -1;
+#endif
                 refresh_programs(w);   /* a BANK stepper changes the preset list */
             } else if (eng_get(w, tp->key, buf, sizeof buf) > 0) {
                 float cur = (float)atof(buf) + p->step_delta;
@@ -296,6 +330,21 @@ static void setParameter(AEffect *e, int32_t i, float n) {
         const float cur = get_norm(w, i), d = n - cur;
         if (d != 0 && fabsf(d) < 0.02f) n = clamp01(cur + d * p->nudge_gain);
     }
+#if QLINK_TRAVEL
+    /* A value on an option (a press, a preset, automation) selects it; one between options is a turn: kept as the shadow
+     * position and the option it rounds to is selected, so a turn moves one option per option's width of travel. */
+    float shadow = -1;
+    if (p->nopts > 1) {
+        float pos = clamp01(n) * (p->nopts - 1);
+        if (fabsf(pos - roundf(pos)) > 0.001f) {
+            nudge = 1;
+            shadow = clamp01(n);
+            n = roundf(pos) / (p->nopts - 1);
+        }
+    } else if (!p->momentary && !p->string_display) {
+        shadow = clamp01(n);
+    }
+#else
     if (p->nopts > 1) {
         /* A value on an option (button press, preset, automation) selects it; one between options is a
          * Q-Link / data wheel / drag move, settled as above. A param with "qlink_ticks" > 1 instead counts small
@@ -347,8 +396,16 @@ static void setParameter(AEffect *e, int32_t i, float n) {
         }
         n = clamp01(steps / span);
     }
+#endif
     norm_to_str(p, n, buf, sizeof buf);
-    eng_set(w, PARAMS[i].key, buf);
+#if SET_IF_CHANGED
+    char cur[64];
+    if (p->momentary || eng_get(w, PARAMS[i].key, cur, sizeof cur) <= 0 || strcmp(cur, buf))
+#endif
+        eng_set(w, PARAMS[i].key, buf);
+#if QLINK_TRAVEL
+    w->shadow[i] = shadow;
+#endif
     refresh_programs(w);   /* a bank switch changes the preset list */
     if (PARAMS[i].momentary && n > 0.5f) w->holdFrames[i] = PARAMS[i].hold_ms > 0 ? (int)(PARAMS[i].hold_ms * 44.1f) : 1;
     if (!nudge) popup_picked(w->open, w->holdFrames, i);   /* a list pick closes it; a Q-Link nudge doesn't */
@@ -853,7 +910,7 @@ __attribute__((visibility("default"))) AEffect *VSTPluginMain(audioMasterCallbac
     if (!w->dsp) { pthread_mutex_destroy(&w->lock); free(w); return NULL; }
     w->master = master;
     w->pos = DSP_BLOCK;
-    for (int i = 0; i < NPARAMS; i++) w->last_pos[i] = w->last_norm[i] = -1;
+    for (int i = 0; i < NPARAMS; i++) w->last_pos[i] = w->last_norm[i] = w->shadow[i] = -1;
     w->nrpn = -1;
     AEffect *e = &w->fx;
     e->magic = 0x56737450; /* 'VstP' */

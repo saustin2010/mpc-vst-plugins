@@ -10,6 +10,9 @@
 #include <math.h>
 #include <pthread.h>
 #include "params.h"
+#ifndef QLINK_TRAVEL
+#define QLINK_TRAVEL 0
+#endif
 #ifndef TEST_CLAMPED   /* gen_vst.py: params the engine limits to what it has loaded ("clamped") */
 #define TEST_CLAMPED ",,"
 #endif
@@ -301,11 +304,30 @@ int main(void) {
         a->setP(a, cont, 0.25f); a->d(a, 7, cont, 0, d, 0);
         CHECK(fabsf(a->getP(a, cont) - 0.25f) <= tol, "set %s 0.25 -> get %.3f (\"%s\")", PARAMS[cont].key, a->getP(a, cont), d);
         CHECK(fabsf(b->getP(b, cont) - 0.25f) > 1e-4f || PARAMS[cont].def == 0.25f, "instance b unaffected");
+#if QLINK_TRAVEL
+        /* 50 Q-Link ticks of 0.0004 (far below one step of an int or percent param), re-reading in between: they must add
+         * up to ~0.02, not round back to where they started */
+        float x = a->getP(a, cont), x0 = x;
+        for (int k = 0; k < 50; k++) { x += 0.0004f; a->setP(a, cont, x); x = a->getP(a, cont); }
+        CHECK(fabsf(x - x0 - 0.02f) < 0.011f, "travel: slow Q-Link ticks add up on %s (%.3f -> %.3f)", PARAMS[cont].key, x0, x);
+#endif
     }
     if (en >= 0) {
         int n = PARAMS[en].nopts;
         a->setP(a, en, 1.0f); a->d(a, 7, en, 0, d, 0);
         CHECK(!strcmp(d, PARAMS[en].opts[n - 1]), "option %s -> \"%s\" (want \"%s\")", PARAMS[en].key, d, PARAMS[en].opts[n - 1]);
+#if QLINK_TRAVEL
+        /* a slow Q-Link turn down from the last option: 20 ticks re-reading getParameter in between (as MPC does), 0.6 of
+         * an option's width in all: exactly one option down (ticks add up; one tick alone doesn't step) */
+        float x = a->getP(a, en);
+        x -= 0.03f / (n - 1); a->setP(a, en, x); d[0] = 0; a->d(a, 7, en, 0, d, 0);
+        CHECK(!strcmp(d, PARAMS[en].opts[n - 1]), "travel: one small tick stays on \"%s\" (\"%s\")", PARAMS[en].opts[n - 1], d);
+        x = a->getP(a, en);
+        for (int k = 1; k < 20; k++) { x -= 0.03f / (n - 1); a->setP(a, en, x); x = a->getP(a, en); }
+        d[0] = 0; a->d(a, 7, en, 0, d, 0);
+        CHECK(!strcmp(d, PARAMS[en].opts[n - 2]), "travel: a slow Q-Link turn moves one option (\"%s\")", d);
+        a->setP(a, en, 0);
+#else
         a->setP(a, en, (n - 1.5f) / (n - 1));   /* half an option down from the last: one option down (settle() rounds toward the move) */
         CHECK(fabsf(a->getP(a, en) - (float)(n - 2) / (n - 1)) < 1e-3f, "nudge steps one option (%.3f)", a->getP(a, en));
         if (PARAMS[en].qlink_ticks <= 1) step_tests(a, en, "option", n - 1);   /* counted params: below */
@@ -333,6 +355,7 @@ int main(void) {
             CHECK(a->getP(a, en) < 1e-3f, "a large jump down lands on the option below (%.3f)", a->getP(a, en));
             a->setP(a, en, 0);
         }
+#endif
     }
     for (int i = 0; i < NPARAMS; i++) {   /* an integer with its own Q-Link rate: qlink_ticks events per step */
         const param_t *p = &PARAMS[i];
@@ -382,7 +405,7 @@ int main(void) {
         char ck[96];
         snprintf(ck, sizeof ck, ",%s,", PARAMS[i].key);
         if (strstr(TEST_CLAMPED, ck)) continue;
-        if (!PARAMS[i].nopts && PARAMS[i].int_display && PARAMS[i].qlink_ticks <= 1 && PARAMS[i].max - PARAMS[i].min >= 2) { step_tests(a, i, "int", (int)(PARAMS[i].max - PARAMS[i].min)); break; }
+        if (!QLINK_TRAVEL && !PARAMS[i].nopts && PARAMS[i].int_display && PARAMS[i].qlink_ticks <= 1 && PARAMS[i].max - PARAMS[i].min >= 2) { step_tests(a, i, "int", (int)(PARAMS[i].max - PARAMS[i].min)); break; }
     }
     if (pop >= 0) {
         int t = PARAMS[pop].popup_of, n = PARAMS[t].nopts;
