@@ -144,6 +144,8 @@ typedef struct {
     volatile char cc_changed[NPARAMS];   /* set from MIDI CC/NRPN, reported to the host at most every 1024 frames */
     int cc_report;           /* frames until CC-driven changes are reported again */
     int program;             /* NPRESETS: the preset last picked (not in the engine's state; 0 after a reload) */
+    int nprog;               /* PROG_PARAM: programs listed (the range, or the engine's own count: program_count) */
+    char (*prog)[25];        /* PROG_NAME_PARAM: names read at creation (program_names); NULL: named on demand */
 #if SAMPLE_ACCURATE
     struct { int32_t frame; uint8_t msg[3]; } evq[WRAP_EVQ];   /* this block's MIDI, sorted by frame (see queue_midi) */
     int nev;
@@ -240,6 +242,8 @@ static float settle(float pos, float cur, float last) {
     return dir > 0 ? ceilf(pos - 0.001f) : floorf(pos + 0.001f);
 }
 
+static void refresh_programs(wrap_t *w);
+
 static void setParameter(AEffect *e, int32_t i, float n) {
     wrap_t *w = e->object;
     TRACE(0, i, n);
@@ -266,6 +270,7 @@ static void setParameter(AEffect *e, int32_t i, float n) {
                 norm_to_str(tp, (float)idx / (tp->nopts - 1), buf, sizeof buf);
                 eng_set(w, tp->key, buf);
                 w->changed[p->step_target] = 1;
+                refresh_programs(w);   /* a BANK stepper changes the preset list */
             } else if (eng_get(w, tp->key, buf, sizeof buf) > 0) {
                 float cur = (float)atof(buf) + p->step_delta;
                 if (cur < tp->min) cur = tp->min;
@@ -344,6 +349,7 @@ static void setParameter(AEffect *e, int32_t i, float n) {
     }
     norm_to_str(p, n, buf, sizeof buf);
     eng_set(w, PARAMS[i].key, buf);
+    refresh_programs(w);   /* a bank switch changes the preset list */
     if (PARAMS[i].momentary && n > 0.5f) w->holdFrames[i] = PARAMS[i].hold_ms > 0 ? (int)(PARAMS[i].hold_ms * 44.1f) : 1;
     if (!nudge) popup_picked(w->open, w->holdFrames, i);   /* a list pick closes it; a Q-Link nudge doesn't */
     w->need_update_display = 1;   /* deferred to processReplacing(), see the step_target branch above */
@@ -610,6 +616,69 @@ static void copy_str(void *dst, const char *src, size_t max) {
 #else
 #define NUM_PROGRAMS 0
 #endif
+#if defined(PROG_PARAM) && !defined(PROG_NAME_PARAM)
+#define PROG_NAME_PARAM -1
+#endif
+
+/* Programs listed now: NUM_PROGRAMS is the most there can be. vst.json "programs" options (gen_vst.py program_lines):
+ * "count" -- the engine's own preset count (PROG_COUNT_KEY), when its list is shorter than the parameter's range or
+ *            changes (banks, files the user adds): re-read after every parameter change while names are asked live;
+ * "name_at" -- the engine names preset n for get_param("<name_at>:<n>") (PROG_NAME_AT) instead of "<preset key>:<n>";
+ * "name" -- for an engine that can only name the preset it has loaded: a readout parameter (PROG_NAME_PARAM) read for
+ *            each preset once, at creation, by loading them in turn (program_names; the engine's state is restored). */
+static int num_programs(wrap_t *w) {
+#if defined(NPRESETS)
+    (void)w;
+    return NPRESETS;
+#elif defined(PROG_PARAM)
+    return w->nprog;
+#else
+    (void)w;
+    return 0;
+#endif
+}
+
+#if defined(PROG_PARAM)
+static int program_count(wrap_t *w) {
+    int n = NPROGRAMS;
+#ifdef PROG_COUNT_KEY
+    char buf[32];
+    if (eng_get(w, PROG_COUNT_KEY, buf, sizeof buf) > 0 && atoi(buf) >= 0 && atoi(buf) < n) n = atoi(buf);
+#else
+    (void)w;
+#endif
+    return n;
+}
+
+static void program_names(wrap_t *w) {
+    const param_t *pp = &PARAMS[PROG_PARAM];
+    char *saved = malloc(sizeof w->chunk), cur[64] = "";
+    int have = saved && eng_get(w, "state", saved, sizeof w->chunk) > 0;
+    eng_get(w, pp->key, cur, sizeof cur);
+    w->prog = calloc((size_t)(w->nprog > 0 ? w->nprog : 1), sizeof *w->prog);
+    for (int i = 0; w->prog && i < w->nprog; i++) {
+        char v[64], name[64] = "";
+        if (pp->nopts > 1) norm_to_str(pp, (float)i / (pp->nopts - 1), v, sizeof v);
+        else snprintf(v, sizeof v, "%d", (int)lroundf(pp->min) + i);
+        eng_set(w, pp->key, v);
+        if (PROG_NAME_PARAM >= 0) eng_get(w, PARAMS[PROG_NAME_PARAM].key, name, sizeof name);
+        if (!name[0]) snprintf(name, sizeof name, "%s %d", pp->name, (int)lroundf(pp->min) + i);
+        copy_str(w->prog[i], name, sizeof w->prog[i]);
+    }
+    if (have) eng_set(w, "state", saved);
+    else if (cur[0]) eng_set(w, pp->key, cur);
+    free(saved);
+    if (!w->prog) w->nprog = 0;
+}
+#endif
+
+static void refresh_programs(wrap_t *w) {   /* a counted list named live follows the engine; a cached one keeps its count */
+#if defined(PROG_PARAM) && defined(PROG_COUNT_KEY)
+    if (!w->prog) w->fx.numPrograms = w->nprog = program_count(w);
+#else
+    (void)w;
+#endif
+}
 
 static int get_program(wrap_t *w) {
 #if defined(PROG_PARAM)
@@ -622,7 +691,7 @@ static int get_program(wrap_t *w) {
 }
 
 static void set_program(wrap_t *w, int idx) {
-    if (idx < 0 || idx >= NUM_PROGRAMS || idx == get_program(w)) return;   /* a host re-selecting the current one
+    if (idx < 0 || idx >= num_programs(w) || idx == get_program(w)) return;   /* a host re-selecting the current one
                                                                               * (JUCE does at load) keeps any edits */
 #if defined(NPRESETS)
     for (int i = 0; i < PRESETS[idx].n; i++) {
@@ -642,15 +711,20 @@ static void set_program(wrap_t *w, int idx) {
 
 static void program_name(wrap_t *w, int idx, char *out) {
     out[0] = 0;
-    if (idx < 0 || idx >= NUM_PROGRAMS) return;
+    if (idx < 0 || idx >= num_programs(w)) return;
 #if defined(NPRESETS)
     (void)w;
     copy_str(out, PRESETS[idx].name, 24);
 #elif defined(PROG_PARAM)
     char k2[96], buf[64];
     const param_t *pp = &PARAMS[PROG_PARAM];
+    if (w->prog) { copy_str(out, w->prog[idx], 24); return; }   /* "name": read at creation */
     if (pp->nopts > 1) { copy_str(out, pp->opts[idx], 24); return; }
+#ifdef PROG_NAME_AT
+    snprintf(k2, sizeof k2, "%s:%d", PROG_NAME_AT, (int)lroundf(pp->min) + idx);   /* the engine names it without loading it */
+#else
     snprintf(k2, sizeof k2, "%s:%d", pp->key, (int)lroundf(pp->min) + idx);   /* the engine names it without loading it */
+#endif
     if (eng_get(w, k2, buf, sizeof buf) > 0) copy_str(out, buf, 24);
     else snprintf(out, 24, "%s %d", pp->name, (int)lroundf(pp->min) + idx);
 #else
@@ -665,6 +739,7 @@ static intptr_t dispatcher(AEffect *e, int32_t op, int32_t idx, intptr_t v, void
     case effOpen: return 1;
     case effClose:
         g_api->destroy(w->dsp);
+        free(w->prog);
         pthread_mutex_destroy(&w->lock);
         free(w);
         return 1;
@@ -728,9 +803,9 @@ static intptr_t dispatcher(AEffect *e, int32_t op, int32_t idx, intptr_t v, void
         return 1;
     }
     case effSetProgram: set_program(w, (int)v); return 1;
-    case effGetProgram: return NUM_PROGRAMS ? get_program(w) : 0;
-    case effGetProgramName: program_name(w, NUM_PROGRAMS ? get_program(w) : -1, p); return 1;
-    case effGetProgramNameIndexed: program_name(w, idx, p); return idx >= 0 && idx < NUM_PROGRAMS;
+    case effGetProgram: return num_programs(w) ? get_program(w) : 0;
+    case effGetProgramName: program_name(w, num_programs(w) ? get_program(w) : -1, p); return 1;
+    case effGetProgramNameIndexed: program_name(w, idx, p); return idx >= 0 && idx < num_programs(w);
     case effCanDo:
         return (!strcmp(p, "receiveVstEvents") || !strcmp(p, "receiveVstMidiEvent") ||
                 !strcmp(p, "receiveVstTimeInfo")) ? 1 : -1;
@@ -745,6 +820,7 @@ static intptr_t dispatcher(AEffect *e, int32_t op, int32_t idx, intptr_t v, void
         memcpy(w->chunk, p, v);
         w->chunk[v - 1] = 0;
         eng_set(w, "state", w->chunk);
+        refresh_programs(w);   /* the project's bank */
         return 1;
     }
     default: return 0;
@@ -787,7 +863,11 @@ __attribute__((visibility("default"))) AEffect *VSTPluginMain(audioMasterCallbac
     e->getParameter = getParameter;
     e->processReplacing = processReplacing;
     e->numParams = NPARAMS;
-    e->numPrograms = NUM_PROGRAMS;
+#if defined(PROG_PARAM)
+    w->nprog = program_count(w);
+    if (PROG_NAME_PARAM >= 0) program_names(w);
+#endif
+    e->numPrograms = num_programs(w);
 #ifdef PLUG_EFFECT
     e->numInputs = 2;
     e->numOutputs = 2;

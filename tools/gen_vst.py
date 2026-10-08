@@ -214,7 +214,11 @@ def program_lines(cfg, params, key_to_index):
                                      (or the bare list); values in the parameter's own units or an option's label
        "programs": {"param": key} -- the engine's own preset parameter: one program per option (named by the
                                      option), or per whole number of its range (named by get_param("<key>:<n>") when
-                                     the engine answers, else "<name> <n>")."""
+                                     the engine answers, else "<name> <n>"). Optional, for an engine whose list differs:
+                                     "count": a key the engine answers with its own preset count (a list shorter than
+                                     the range, or one that changes); "name_at": the key to ask "<name_at>:<n>" with
+                                     instead; "name": a readout naming the loaded preset, read for each preset once at
+                                     creation (for an engine that can only name the one it has loaded; not with name_at)."""
     if cfg.get("presets") and cfg.get("programs"):
         raise SystemExit("vst.json: use \"presets\" or \"programs\", not both")
     if cfg.get("presets"):
@@ -247,7 +251,17 @@ def program_lines(cfg, params, key_to_index):
         n = len(p.get("options") or []) or int(round(p.get("max", 0) - p.get("min", 0))) + 1
         if n < 2 or not (p.get("options") or p.get("display") == "int"):
             raise SystemExit("vst.json programs: %r must be an option list or a \"display\": \"int\" range" % k)
-        return ["#define PROG_PARAM %d" % key_to_index[k], "#define NPROGRAMS %d" % min(n, 1024)]
+        pr = cfg["programs"]
+        out = ["#define PROG_PARAM %d" % key_to_index[k], "#define NPROGRAMS %d" % min(n, 1024)]
+        if pr.get("name") and pr["name"] not in key_to_index:   # count and name_at are keys the engine answers
+            raise SystemExit("vst.json programs: name %r is not a parameter" % pr["name"])
+        if pr.get("count"):
+            out.append("#define PROG_COUNT_KEY %s" % c_str(pr["count"]))
+        if pr.get("name_at"):
+            out.append("#define PROG_NAME_AT %s" % c_str(pr["name_at"]))
+        elif pr.get("name") and not p.get("options"):
+            out.append("#define PROG_NAME_PARAM %d" % key_to_index[pr["name"]])
+        return out
     return []
 
 
