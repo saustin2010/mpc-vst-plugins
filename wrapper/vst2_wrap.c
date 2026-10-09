@@ -35,6 +35,10 @@
                                  * meters; value-driven widgets (picture, meter) still move. Text readouts then redraw only on an
                                  * UpdateDisplay from elsewhere (a preset pick): show live numbers as pictures. */
 #endif
+#ifndef PLUG_LIVE_COUNT  /* vst.json "live" (gen_vst.py): display params the DSP moves by itself, reported every block */
+#define PLUG_LIVE_COUNT 0
+static const int PLUG_LIVE[1] = {-1};
+#endif
 #ifndef PARAM_TEXT_MAX
 #define PARAM_TEXT_MAX 24 /* value text length handed to the host, NUL included. The VST2 spec says 8, JUCE's buffer is
                            * bigger; ports that show sentences (status lines) raise it via vst.json "defines" */
@@ -155,6 +159,7 @@ typedef struct {
     int cc_report;           /* frames until CC-driven changes are reported again */
     int program;             /* NPRESETS: the preset last picked (not in the engine's state; 0 after a reload) */
     float shadow[NPARAMS];   /* QLINK_TRAVEL: the host's unrounded position on a stepped param; <0 = none (get_norm) */
+    float live_last[PLUG_LIVE_COUNT > 0 ? PLUG_LIVE_COUNT : 1];   /* "live" params: the value the host was last told */
     int nprog;               /* PROG_PARAM: programs listed (the range, or the engine's own count: program_count) */
     char (*prog)[25];        /* PROG_NAME_PARAM: names read at creation (program_names); NULL: named on demand */
 #if SAMPLE_ACCURATE
@@ -516,6 +521,13 @@ static void housekeeping(AEffect *e, int32_t n) {
         if (w->holdFrames[i] > 0 && (w->holdFrames[i] -= n) <= 0) { w->holdFrames[i] = 0; w->master(&w->fx, audioMasterAutomate, i, 0, 0, 0.0f); }
     for (int i = 0; i < NPARAMS; i++)
         if (w->changed[i]) { w->changed[i] = 0; w->master(&w->fx, audioMasterAutomate, i, 0, 0, get_norm(w, i)); }
+    /* "live" params the DSP moved since the last block (a sequencer's playing step): tell the host, so a skin bound to
+     * them follows. A host doesn't re-read a value nobody touched, and display_rev's poll (100 ms) is too slow for a
+     * step light. */
+    for (int k = 0; k < PLUG_LIVE_COUNT; k++) {
+        float v = get_norm(w, PLUG_LIVE[k]);
+        if (v != w->live_last[k]) { w->live_last[k] = v; w->master(&w->fx, audioMasterAutomate, PLUG_LIVE[k], 0, 0, v); }
+    }
     /* Text params are polled, not only read after a screen tap, because MIDI alone can change them (a pad plays
      * a chord, nothing on screen touched):
      * - list-tile selection ("<key>_on"), every 10 ms: the host doesn't re-read a button's value on UpdateDisplay,
@@ -912,6 +924,7 @@ __attribute__((visibility("default"))) AEffect *VSTPluginMain(audioMasterCallbac
     w->pos = DSP_BLOCK;
     for (int i = 0; i < NPARAMS; i++) w->last_pos[i] = w->last_norm[i] = w->shadow[i] = -1;
     w->nrpn = -1;
+    for (int k = 0; k < PLUG_LIVE_COUNT; k++) w->live_last[k] = get_norm(w, PLUG_LIVE[k]);
     AEffect *e = &w->fx;
     e->magic = 0x56737450; /* 'VstP' */
     e->dispatcher = dispatcher;

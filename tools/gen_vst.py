@@ -22,6 +22,8 @@ vst.json (paths are relative to the vst.json's folder):
                                                  #   (both: program_lines() below)
       "cc": false, "nrpn": false,                # optional: no CC 20-35 -> first page's Q-Links / no NRPN -> any parameter
                                                  #   (both on by default; cc_lines() below)
+      "live": ["play_step"],                     # optional: display params the DSP moves by itself (a sequencer's playing
+                                                 #   step), reported to the host every block so the skin follows
       "custom_skin": true,                       # optional: params.h + plugin-list entry only; the port makes the skin itself
       "defines": {"HAS_LFO_BPM": 1},             # optional extra #defines in params.h
                                                  #   (HAS_LFO_BPM: host tempo as "lfo_bpm"; HAS_TRANSPORT: play/stop as "transport")
@@ -181,6 +183,16 @@ def gen_params(cfg, params, out):
     # needn't read back the same: tools/host_test.c doesn't pick it for its round-trip checks.
     lines.append("#define TEST_CLAMPED %s" % c_str("," + ",".join(p["key"] for p in params if p.get("clamped")) + ","))
     lines += ["#define %s %s" % (k, v) for k, v in cfg.get("defines", {}).items()]
+    # "live": [<key>, ...] -- display parameters the DSP changes on its own (a sequencer's playing step): the wrapper
+    # reads them every block and tells the host when one changed (audioMasterAutomate), so a skin bound to them follows.
+    # Keep them few and slow: each report costs the host's screen thread.
+    live = cfg.get("live") or []
+    for k in live:
+        if k not in key_to_index:
+            raise SystemExit("live: %r is not a parameter" % k)
+    if live:
+        lines += ["#define PLUG_LIVE_COUNT %d" % len(live),
+                  "static const int PLUG_LIVE[] = {%s};" % ", ".join(str(key_to_index[k]) for k in live)]
     if cfg.get("effect"):
         lines.append("#define PLUG_EFFECT 1")
     lines += program_lines(cfg, params, key_to_index)
