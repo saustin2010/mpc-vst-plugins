@@ -263,8 +263,14 @@ static void program_tests(AEffect *a) {
 #if defined(NPRESETS)
     for (int i = 0; i < PRESETS[pick].n; i++) {
         const param_t *p = &PARAMS[PRESETS[pick].values[i].param];
-        float want = p->nopts > 1 ? atof(PRESETS[pick].values[i].value) / (p->nopts - 1)
-                                  : (atof(PRESETS[pick].values[i].value) - p->min) / (p->max - p->min);
+        const char *pv = PRESETS[pick].values[i].value;
+        float want = (atof(pv) - p->min) / (p->max - p->min);
+        if (p->nopts > 1) {   /* the preset holds what the option sends (gen_vst.py preset_value): its value, word or index */
+            int idx = atoi(pv);
+            for (int o = 0; o < p->nopts; o++)
+                if (p->values ? fabsf(p->values[o] - (float)atof(pv)) < 1e-6f : p->send && !strcmp(p->send[o], pv)) { idx = o; break; }
+            want = (float)idx / (p->nopts - 1);
+        }
         float got = a->getP(a, PRESETS[pick].values[i].param);
         CHECK(fabsf(got - want) < 1e-3f, "preset \"%s\" sets %s (%g, want %g)", PRESETS[pick].name, p->key, got, want);
         CHECK(automated[PRESETS[pick].values[i].param] > 0, "preset change of %s reported to the host", p->key);
