@@ -1271,3 +1271,14 @@ A Force user saw `No drive under /media is mounted noexec` on the first `status`
 - `status` only lists mounts that `/proc/self/mountinfo` shows as `noexec` (`candidates`), so `662522` is the drive MPC mounted `noexec` at that time; `SSD - Force` was not a `noexec` mount then (not mounted, or mounted `exec`). `edisksd` names the mount point after the volume label, or a number when there is none; a leftover folder in `/media` is not proof of a mounted drive. Which of the two is the SSD was not shown by the output: needs `mount | grep /media` from the user (not yet received).
 - Why the first run found nothing is not established (the drive was probably not mounted yet or was remounted; the user's mount lines were not captured).
 - Change (offline only, tested against fake mountinfo and `tools/test_drive_exec.py`): `status` now also prints every mount under `/media` with filesystem, device and `exec`/`noexec`, so the output says which name is which drive.
+
+## MPC's host toggles parameter 0 on insert and on every STOP (Live II, 2026-10-10)
+A trace on an MPC Live II (MPC OS 3.9.1) showed, on inserting a plugin and on every press of STOP: `effMainsChanged`,
+`effSetSampleRate`, `effSetBlockSize`, `effMainsChanged`, then `setParameter(0, 1.0)` and `setParameter(0, <old>)`
+(or 0.0 then old, when old >= 0.5). That is JUCE's `prepareToPlay` in its VST2 host ("a dodgy hack to force some
+plugins to initialise the sample rate", for plugins without an editor), which MPC runs again on STOP. Harmless for a
+knob, but where parameter 0 is a preset (Hera, Fizzik, NuSaw, Percolator's kit ...) each set loaded one, so every knob
+moved since went back to the preset when STOP was pressed. The wrapper now holds a host set of parameter 0 until the
+next block (or until a preset, the state, its display text or another parameter comes) and drops a pair that ends where
+it started (`setParameter`, `flush_pend0`); `tools/host_test.c` replays the toggle with every knob moved
+(`param0_toggle_check`: Hera failed it with 20 of 22 knobs changed before the fix).
