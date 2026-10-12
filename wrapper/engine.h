@@ -33,3 +33,10 @@ const mpc_engine_t *mpc_engine(void);
  * notes at the start of the buffer (<0 if unknown) and whether the transport is playing. Weak: engines that don't define
  * it are unaffected, and HAS_TRANSPORT / HAS_LFO_BPM (vst2_wrap.c) still work alongside it. */
 void mpc_engine_transport(void *inst, double bpm, double ppq, int playing) __attribute__((weak));
+
+/* Optional: an engine that changes its own parameters (MIDI it reads on a port of its own, say) reports them here, one
+ * key per call, into `key`; it returns 0 once none are left. The wrapper asks once per host buffer, under the engine
+ * lock, and tells the host as it does for a MIDI CC (at most every 1024 frames per control), so the screen and the
+ * Q-Links follow; a changed option list also asks for an UpdateDisplay (it can rename other controls). Weak, like the
+ * transport hook. */
+int mpc_engine_changed(void *inst, char *key, int len) __attribute__((weak));
