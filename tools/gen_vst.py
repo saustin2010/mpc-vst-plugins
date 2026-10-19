@@ -136,7 +136,7 @@ def gen_params(cfg, params, out):
         # "nudge_pct" -- for a long "display": "int" list (a bank list of up to 998): any move up to this percent of the range
         # (a Q-Link event is 1/128 of it, a wheel click 1/100) is ONE step in its direction instead of crossing eight to ten
         # entries; a bigger move (automation, a drag) still sets the value outright. 0 = off. Combine with qlink_ticks to
-        # slow it further. 10 suits a Q-Link and the wheel.
+        # slow it further. 10 suits a Q-Link and the wheel. With QLINK_TRAVEL too (where other params add up travel).
         nudge = int(p.get("nudge_pct", 0))
         # "nudge_gain" -- for a continuous or whole-number knob: multiply the small moves (a data wheel click is 1/100 of the range,
         # a Q-Link event 1/128) by this, so the jog wheel crosses 0-127 in fewer clicks. 0 or 1 = off; a drag or a jump (a move of 2%

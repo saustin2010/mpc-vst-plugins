@@ -65,7 +65,8 @@ void wrap_trace(int kind, int idx, float value);
 #define QLINK_TRAVEL 0 /* 1 (vst.json "defines"): stepped controls move by travel, like a detented knob, instead of a step per
                         * event (settle()): the host's unrounded position is kept and handed back (shadow[]), so Q-Link and
                         * data-wheel ticks add up, and an option changes once the turn has crossed half an option's width.
-                        * Continuous and whole-number params keep their position between the engine's own steps too. */
+                        * Continuous and whole-number params keep their position between the engine's own steps too,
+                        * except a whole-number param with "nudge_pct", which still steps one per event (whole_steps()). */
 #endif
 #ifndef SET_IF_CHANGED
 #define SET_IF_CHANGED 0 /* 1: a set to the value the engine already reports is skipped (triggers always go through), for
@@ -283,6 +284,35 @@ static float settle(float pos, float cur, float last) {
 
 static void refresh_programs(wrap_t *w);
 
+/* Where a whole-number param lands, in steps from its minimum, or -1 when the move is only counted (the host reads the
+ * same value back). Settled like options, or counted with "qlink_ticks" > 1 (a short range such as a MIDI channel). A
+ * move of half a step or more is a direct set (automation, a drag), not a tick, unless the param has "nudge_pct": a long
+ * list (a bank list of up to 998) a Q-Link event or wheel click would cross eight to ten entries of at a time (1/128 and
+ * 1/100 of the range), so any move up to that percent of the range counts as one tick, one step in its direction (one
+ * per qlink_ticks of them with both). MPC clamps the value it sends, so a move that lands on the minimum or maximum from
+ * within that distance is a tick too, not a jump to the end. */
+static float whole_steps(wrap_t *w, int32_t i, float n) {
+    const param_t *p = &PARAMS[i];
+    float span = p->max - p->min, pos = clamp01(n) * span, cur = get_norm(w, i) * span;
+    float tickmax = p->nudge_pct > 0 ? fmaxf(0.5f, span * p->nudge_pct / 100.0f) : 0.5f;
+    int edge = (pos < 0.001f || pos > span - 0.001f) && fabsf(pos - cur) >= 0.5f;
+    if ((p->qlink_ticks > 1 || p->nudge_pct > 0) && (fabsf(pos - roundf(pos)) > 0.001f || edge) && fabsf(pos - cur) < tickmax) {
+        float d = pos - cur;
+        w->last_pos[i] = pos;
+        if (p->qlink_ticks > 1) {
+            if (d * w->qacc[i] < 0) w->qacc[i] = 0;
+            w->qacc[i] += d > 0 ? 1 : -1;
+            if (fabsf(w->qacc[i]) < p->qlink_ticks) return -1;
+            w->qacc[i] = 0;
+        }
+        return roundf(cur) + (d > 0 ? 1 : -1);
+    }
+    w->qacc[i] = 0;
+    float steps = settle(pos, cur, w->last_pos[i]);
+    w->last_pos[i] = pos;
+    return steps;
+}
+
 static void set_param_now(AEffect *e, int32_t i, float n) {
     wrap_t *w = e->object;
     TRACE(0, i, n);
@@ -342,7 +372,13 @@ static void set_param_now(AEffect *e, int32_t i, float n) {
     /* A value on an option (a press, a preset, automation) selects it; one between options is a turn: kept as the shadow
      * position and the option it rounds to is selected, so a turn moves one option per option's width of travel. */
     float shadow = -1;
-    if (p->nopts > 1) {
+    if (p->nopts <= 1 && p->int_display && p->nudge_pct > 0 && p->max > p->min) {
+        /* a long whole-number list ("nudge_pct"): one step a Q-Link event or wheel click, as without QLINK_TRAVEL, where
+         * travel would cross two to eight values at a time (a sample number, a kit, a list's rows); no shadow position */
+        float steps = whole_steps(w, i, n);
+        if (steps < 0) return;
+        n = clamp01(steps / (p->max - p->min));
+    } else if (p->nopts > 1) {
         float pos = clamp01(n) * (p->nopts - 1);
         if (fabsf(pos - roundf(pos)) > 0.001f) {
             nudge = 1;
@@ -377,32 +413,10 @@ static void set_param_now(AEffect *e, int32_t i, float n) {
         }
         n = clamp01(idx / (p->nopts - 1));
     }
-    else if (p->int_display && p->max > p->min) {
-        /* whole numbers: settled like options, or counted with "qlink_ticks" > 1 (a short range such as a MIDI
-         * channel). A move of half a step or more is a direct set (automation, a drag), not a tick, unless the param
-         * has "nudge_pct": a long list (a bank list of up to 998) a Q-Link event or wheel click would cross eight to ten
-         * entries of at a time (1/128 and 1/100 of the range), so any move up to that percent of the range counts as one
-         * tick, one step in its direction (one per qlink_ticks of them with both). MPC clamps the value it sends, so a
-         * move that lands on the minimum or maximum from within that distance is a tick too, not a jump to the end. */
-        float span = p->max - p->min, pos = clamp01(n) * span, cur = get_norm(w, i) * span, steps;
-        float tickmax = p->nudge_pct > 0 ? fmaxf(0.5f, span * p->nudge_pct / 100.0f) : 0.5f;
-        int edge = (pos < 0.001f || pos > span - 0.001f) && fabsf(pos - cur) >= 0.5f;
-        if ((p->qlink_ticks > 1 || p->nudge_pct > 0) && (fabsf(pos - roundf(pos)) > 0.001f || edge) && fabsf(pos - cur) < tickmax) {
-            float d = pos - cur;
-            w->last_pos[i] = pos;
-            if (p->qlink_ticks > 1) {
-                if (d * w->qacc[i] < 0) w->qacc[i] = 0;
-                w->qacc[i] += d > 0 ? 1 : -1;
-                if (fabsf(w->qacc[i]) < p->qlink_ticks) return;   /* the host reads the same value back */
-                w->qacc[i] = 0;
-            }
-            steps = roundf(cur) + (d > 0 ? 1 : -1);
-        } else {
-            w->qacc[i] = 0;
-            steps = settle(pos, cur, w->last_pos[i]);
-            w->last_pos[i] = pos;
-        }
-        n = clamp01(steps / span);
+    else if (p->int_display && p->max > p->min) {   /* whole numbers: whole_steps() */
+        float steps = whole_steps(w, i, n);
+        if (steps < 0) return;   /* the host reads the same value back */
+        n = clamp01(steps / (p->max - p->min));
     }
 #endif
     norm_to_str(p, n, buf, sizeof buf);
