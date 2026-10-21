@@ -26,11 +26,12 @@ typedef struct { int32_t type,byteSize,deltaFrames,flags,noteLength,noteOffset; 
 typedef struct { int32_t n; intptr_t r; void* ev[2]; } EV;
 extern AEffect* VSTPluginMain(cb);
 
-static int automated[NPARAMS > 0 ? NPARAMS : 1], fails;
+static int automated[NPARAMS > 0 ? NPARAMS : 1], fails, updates;   /* updates: audioMasterUpdateDisplay calls */
 static double ti[16];                    /* VstTimeInfo: [3] ppqPos, [4] tempo, flags = ((int32_t *)&ti[8])[5] */
 static int32_t ti_flags = 1 << 10;       /* tempo valid; transport_tests() adds playing (1 << 1) and ppq valid (1 << 9) */
 static intptr_t host(AEffect*e,int32_t op,int32_t i,intptr_t v,void*p,float o){
     if (op == 0 && i >= 0 && i < NPARAMS) automated[i]++;
+    if (op == 42) updates++;
     if (op == 7) { ti[4] = 120.0; ((int32_t*)&ti[8])[5] = ti_flags; return (intptr_t)ti; }
     return 0;
 }
@@ -351,6 +352,14 @@ int main(void) {
         a->setP(a, cont, 0.25f); a->d(a, 7, cont, 0, d, 0);
         CHECK(fabsf(a->getP(a, cont) - 0.25f) <= tol, "set %s 0.25 -> get %.3f (\"%s\")", PARAMS[cont].key, a->getP(a, cont), d);
         CHECK(fabsf(b->getP(b, cont) - 0.25f) > 1e-4f || PARAMS[cont].def == 0.25f, "instance b unaffected");
+        /* a host write (automation, a Q-Link) asks for no UpdateDisplay of its own: MPC rebuilds its parameter screen on
+         * each one (docs/NOTES.md, 2026-10-21). Polled readouts that show the value may still ask, at most every 100 ms. */
+        if (!PARAMS[cont].refresh_display) {
+            run(a, 40); updates = 0;
+            for (int k = 0; k < 32; k++) { a->setP(a, cont, (k & 1) ? 0.3f : 0.7f); run(a, 1); }
+            CHECK(updates <= 2, "32 host writes of %s over 4096 frames: %d UpdateDisplay(s) (want at most the 100 ms poll's)",
+                  PARAMS[cont].key, updates);
+        }
 #if QLINK_TRAVEL
         /* 50 Q-Link ticks of 0.0004 (far below one step of an int or percent param), re-reading in between: they must add
          * up to ~0.02, not round back to where they started */
