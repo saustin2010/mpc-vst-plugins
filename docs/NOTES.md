@@ -1307,6 +1307,13 @@ every 2205 frames. A request inside that window waits for the next block after i
 stepper or readouts that change on every poll can no longer trigger a screen rebuild on every block. host_test checks a
 stepper pressed every block for 4096 frames (2 UpdateDisplays). Not yet tried on a device.
 
+## 2026-10-21: params.lock, a build check on parameter order (offline only)
+A port author reports from production: inserting one parameter mid-list renumbered everything after it, and the RANDOM
+button then wrote a different parameter. Our skins resolve keys to indices when they are built, so a rebuilt skin follows the
+new order. A hand-edited or stale TUI.json does not, and neither do saved MPC projects, automation lanes or Q-Link maps, which
+store indices. `gen_vst.py` now writes `<port>/params.lock` (the keys in order) and fails the build when an existing key
+changes index. Tested offline on a copy of poc/steptest with a param inserted.
+
 ## 2026-10-21: at most one UpdateDisplay per 50 ms (offline only)
 Follow-up to "no UpdateDisplay on a host write" above: `housekeeping()` now sends at most one `audioMasterUpdateDisplay`
 every 2205 frames. A request inside that window waits for the next block after it rather than being dropped, so a held
