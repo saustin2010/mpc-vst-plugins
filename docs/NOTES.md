@@ -1307,30 +1307,6 @@ every 2205 frames. A request inside that window waits for the next block after i
 stepper or readouts that change on every poll can no longer trigger a screen rebuild on every block. host_test checks a
 stepper pressed every block for 4096 frames (2 UpdateDisplays). Not yet tried on a device.
 
-## 2026-10-21: a port author's review of the wrapper (source review, plus production reports)
-A port author who built a Dexed+ port on this wrapper sent a list of six flaws. Two are fixed in code: the UpdateDisplay on every
-host write (above, plus a 50 ms cap) and index-bound params (params.lock, above). The other four are design limits and are now
-in docs/PORTING.md:
-- every report waits for `processReplacing()`, so nothing reaches the host while MPC isn't rendering;
-- readout polls run on the audio thread, and their cost grows with the number of polled params;
-- one lock covers set, get, MIDI and render; their SQLite query in `set_param` clicked on every press (production);
-- there is no `effGetParameterProperties`, so a control can't be disabled from the host side; make it do nothing in the engine.
-Still open: whether MPC's host reads opcode 56's switch and whole-step flags, which could let Q-Links step option and
-integer params natively. That needs a probe plugin on the device.
-
-## 2026-10-21: params.lock, a build check on parameter order (offline only)
-A port author reports from production: inserting one parameter mid-list renumbered everything after it, and the RANDOM
-button then wrote a different parameter. Our skins resolve keys to indices when they are built, so a rebuilt skin follows the
-new order. A hand-edited or stale TUI.json does not, and neither do saved MPC projects, automation lanes or Q-Link maps, which
-store indices. `gen_vst.py` now writes `<port>/params.lock` (the keys in order) and fails the build when an existing key
-changes index. Tested offline on a copy of poc/steptest with a param inserted.
-
-## 2026-10-21: at most one UpdateDisplay per 50 ms (offline only)
-Follow-up to "no UpdateDisplay on a host write" above: `housekeeping()` now sends at most one `audioMasterUpdateDisplay`
-every 2205 frames. A request inside that window waits for the next block after it rather than being dropped, so a held
-stepper or readouts that change on every poll can no longer trigger a screen rebuild on every block. host_test checks a
-stepper pressed every block for 4096 frames (2 UpdateDisplays). Not yet tried on a device.
-
 ## 2026-10-21: no UpdateDisplay on a host write (a port author's device report; verified on our Force)
 Reported by another port author (a Dexed+ port built on this wrapper), checked on their Force: on track edit →
 automation the physical Q-Links did not move a plugin parameter, or it snapped straight back, while the on-screen knobs
