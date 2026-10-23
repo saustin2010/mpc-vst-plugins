@@ -43,6 +43,7 @@ else
   # TEST_DOCKER_ARGS: extra docker run arguments, e.g. "-v <port>/data:/sdcard/vst/<port>:ro" so an engine that
   # loads presets from its MODULE_DIR finds them in the container too.
   # shellcheck disable=SC2086
-  docker run --rm -u "$(id -u):$(id -g)" -v "$ROOT":"$ROOT" -v "$MV":"$MV":ro -w "$ROOT" ${TEST_DOCKER_ARGS:-} \
+  MVMOUNT="-v $MV:$MV:ro"; [ "$ROOT" = "$MV" ] && MVMOUNT=""   # a port inside this repo is already mounted through ROOT
+  docker run --rm -u "$(id -u):$(id -g)" -v "$ROOT":"$ROOT" $MVMOUNT -w "$ROOT" ${TEST_DOCKER_ARGS:-} \
     -e SOURCES -e CFLAGS -e PORT -e LIBS -e SAN -e MV -e ADAPTER_SRC -e OUT gcc:12 bash -c "$build"'"$OUT"'   # $build ends in a newline and runs under set -e
 fi
