@@ -270,6 +270,9 @@ static void program_tests(AEffect *a) {
     for (int i = 0; i < PRESETS[pick].n; i++) {
         const param_t *p = &PARAMS[PRESETS[pick].values[i].param];
         const char *pv = PRESETS[pick].values[i].value;
+        char ck[96];
+        snprintf(ck, sizeof ck, ",%s,", p->key);
+        if (strstr(TEST_CLAMPED, ck)) continue;   /* "clamped": it reads back what the engine holds it to, not the preset's */
         float want = (atof(pv) - p->min) / (p->max - p->min);
         if (p->nopts > 1) {   /* the preset holds what the option sends (gen_vst.py preset_value): its value, word or index */
             int idx = atoi(pv);
@@ -438,6 +441,9 @@ int main(void) {
     }
     for (int i = 0; i < NPARAMS; i++) {   /* a long whole-number list (a bank list): nudge_pct makes each Q-Link event and wheel click one step */
         const param_t *p = &PARAMS[i];
+        char ck[96];
+        snprintf(ck, sizeof ck, ",%s,", p->key);
+        if (strstr(TEST_CLAMPED, ck)) continue;   /* "clamped": with nothing loaded the engine holds it at its minimum */
         if (p->nopts || !p->int_display || p->nudge_pct <= 0 || p->max - p->min < 2) continue;
         float range = p->max - p->min, rate[2] = {1.0f / 128, 0.01f};   /* a Q-Link event and a data wheel click, of the whole range */
         const char *who[2] = {"Q-Link events", "data wheel clicks"};
