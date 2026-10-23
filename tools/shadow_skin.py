@@ -1111,10 +1111,16 @@ def build(layout_path, params, skin_dir, art_bin, png_from_ppm):
             elif kind == "readout":
                 x, y, rw, rh = w["cx"] - w["w"] // 2, w["cy"] - w["h"] // 2, w["w"], w["h"]
                 dot = w.get("style") == "dotmatrix"
-                size, colour, just, style, font, sig = live_text(w, 26.0, DISPLAY_INK if dot else ACCENT, READOUT_JUST)
+                # vs= (text size) and ink= (a theme colour: ink, dim, faint, accent, accent_hi), as older tools read
+                # them; tsize= / tcolor= win when both are given
+                inks = {"ink": INK, "dim": INK_DIM, "faint": shade(INK_DIM, 0.62), "accent": ACCENT, "accent_hi": ACCENT_HI}
+                size, colour, just, style, font, sig = live_text(w, float(w.get("vs") or 26.0),
+                                                                 inks.get(w.get("ink"), DISPLAY_INK if dot else ACCENT), READOUT_JUST)
                 pad = int(w.get("tpad", 8))
                 key = "shReadout_%s%dx%d%s_p%d" % ("dot_" if dot else "", rw, rh, sig, pad) if sig or pad != 8 else \
                     "shReadout_%s%dx%d" % ("dot_" if dot else "", rw, rh)
+                if not sig and pad == 8 and ((w.get("vs") and "tsize" not in w) or w.get("ink") in inks):
+                    key = "shReadout_%s%dx%d_%g_%s" % ("dot_" if dot else "", rw, rh, size, colour)   # the older tools' name
                 defs.setdefault(key, _local(key, [], [_value_label(pad, 0, rw - 2 * pad, rh, size, colour, just,
                                                                    style=style, font=font)]))
                 kids.append(_placed(key, name, i, x, y, rw, rh, focus="No"))
