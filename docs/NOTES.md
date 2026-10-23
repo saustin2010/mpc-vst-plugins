@@ -1320,3 +1320,388 @@ Ports that need the opt-in: `dynamic_name` labels following a selector (Machined
 `"poll": false` readouts that depend on a written param. Every port must be rebuilt to get the fix. Checked on our Force (2026-10-21,
 JV-880 rebuilt with this and the 50 ms cap): Q-Links on track edit → automation work, and the bank and patch readouts still follow
 the stepper arrows and a direct Q-Link turn.
+
+## Notes from saustin2010/vst_instruments (2026-09-30 to 2026-10-20)
+
+Kept from that repo's old patch on `39660f2` when its builds moved to this branch (2026-10-23). Each section is as it was written then: where it names a wrapper feature, that is now `QLINK_TRAVEL`/`SET_IF_CHANGED`, `"live"`, `"programs"` or `mpc_engine_transport()` on this branch.
+
+### Declared range ≠ the DSP's own units silences a port; host_test now checks it (2026-09-30, OB-Xd)
+OB-Xd (Schwung) made no sound on a Live II. Its `set_param`/`get_param` speak native integers (`atoi`: knobs
+0..100, voices 1..8), but the port's hand-extracted params list declared every knob 0..1. `get_param`'s
+"70" clamps to norm 1.0; MPC sets a param back from its last-read norm (project restore, Q-Link, a knob
+touch), so 1.0 goes out as `"1"` and the DSP takes 1%: cutoff, volume, sustain etc. all collapse and the
+synth goes silent. `tools/host_test.c` passed it anyway (the set/get tolerance was one whole declared range,
+and silence is only a warn). It now also runs `restore_check()` on a fresh instance: every numeric param's
+DSP value must lie inside its declared min/max, `set(get())` for every param must leave every display
+unchanged, and a patch that sounded before must still sound after. Checked offline: FAILs the old OB-Xd params (15 out of
+range, 15 changed, rms 0.018 → 0), PASSes the fixed ones. Across the Schwung ports it also flags mrdrums
+(`pad_decay_ms`/`pad_chance_pct` are ms/% in the DSP, 0..1 declared) and a one-step drift on Noisemaker's
+`osc2_tune`. Two related adapter gaps it can't see: a module param with `"max_param": "<count key>"` (Hera,
+Hank, Hush One's `preset`) and one with no type/range at all (libpo32's `kit`) both fall back to 0..1 in
+`adapters/schwung/module_params.py`, so only presets 0 and 1 are reachable.
+
+Also found porting OB-Xd: an engine that loads a bank from `<module_dir>/presets` needs `"defines":
+{"MODULE_DIR": "\"/sdcard/vst/<port>\""}` plus the bank shipped there, else it finds nothing (PORTING.md's
+`MODULE_DIR` item); and its fallback "Init" patch was silent because it never called `processBrightness`.
+
+`tools/test_port.sh` on macOS: Apple clang's ASan hangs in its own startup on macOS 26 (before `main`), so the
+script uses the gcc:12 container on Darwin. After a Colima restart the arm32 binfmt handler is gone
+(`exec format error` from `build_port.sh`); `docker run --privileged --rm tonistiigi/binfmt --install arm`
+restores it. LeakSanitizer exits via `_exit` on a leak (Noisemaker's upstream `FilterHandler`), which drops
+host_test's buffered stdout; rerun with `ASAN_OPTIONS=detect_leaks=0` to read the checks.
+
+### Porting audit of ten Schwung modules: what to check per engine (2026-10-01, offline)
+Checked with each engine built for Linux and driven directly (get/set/notes), then host_test incl. the restore check:
+- Engines that read `<module_dir>/presets` or `/kits` (Braids, Hera, OB-Xd, libpo32) load nothing without a
+  `MODULE_DIR` define and the folder shipped there. `tools/test_port.sh` now takes `TEST_DOCKER_ARGS` (extra
+  `docker run` args), so the test can mount that folder at its device path and exercise the presets.
+- Some engines report enum values as **text** from `get_param` (Hush One, Mr Hyde, mrdrums: "Manual", "lp",
+  "oneshot"); the wrapper maps them back with `strcasecmp`, so a port may change only their case. A layout's
+  `options=` on a `popup`/`enum_v` changes only the drawn labels, so friendlier text can go there.
+- A module param with a run-time range (`max_param`) or with no range at all falls back to 0..1 in the adapter:
+  give the port an explicit params list (see the 2026-09-30 entry).
+- Move-UI macro params that write through to others (Noisemaker `wave`/`tune2`) break a restore (osc 2 tune moved a
+  step); keep their VST slot but rename the key so the engine ignores it.
+- "Current item" editors (libpo32 `inst` + `inst_*`, mrdrums `ui_current_pad` + `pad_*`) work as one editor page:
+  the wrapper's deferred `audioMasterUpdateDisplay` after every set re-polls the other knobs (display refresh on a
+  device still to be confirmed).
+- A text-path param (mrdrums `pad_sample_path`) can't be set from the MPC and a numeric restore of it clears the
+  pad; such an engine needs another way to reach its files (for mrdrums, kit folders).
+
+### Q-Links on stepped values and switches: accumulate, don't round back (2026-10-01, reported on a Live II)
+Symptom (user, Live II): Q-Links "behave poorly" on stepped controls, e.g. Moog's OSC RANGE (-2..2) and Noisemaker's
+envelope sliders (its engine reports whole percents). Same cause as the jv880 "Q-Links stuck on integer params"
+finding on the owner's unmerged `claude/verify-native-components` branch (commit eb2ee55, verified on a Force): MPC
+sends a slow turn as ticks smaller than one step and re-reads `getParameter` between ticks, so a tick that rounds
+back is lost. That fix covered only `"display": "int"` params. `wrapper/vst2_wrap.c` here now keeps the host's
+unrounded position (`shadow[i]`) for **every** numeric param, returned while the DSP still holds the step that
+position gives, where a step is one unit for int params, else the DSP's own reported resolution (its decimals: none
+= whole units, as Noisemaker's percentages), and rounds int params on the way out (as eb2ee55). **Options** now
+work the same way: a between-options value is kept as the shadow and the option it rounds to is selected, so a
+turn moves one option per option-width of travel like a detented switch; they used to step one option per tick,
+which raced through a list on a slow turn (touch picks and automation land exactly on an option and are unchanged).
+`tools/host_test.c` checks both (50 ticks of 0.0004 must add up; 20 ticks worth 0.6 option must move one option).
+New param opt-in `"values": [...]` (gen_vst -> `param_t.values`): an option sends that value instead of its index
+and maps the DSP's number back to the nearest option, so a DSP that takes the value itself can still be a switch
+(Moog's -2..2 ranges as 32'/16'/8'/4'/2'). Offline-tested; the feel on the device is still to be confirmed.
+
+### Schwung MIDI FX modules as sequencers for other tracks; engine quirks from 16 more ports (2026-10-01, offline)
+**MIDI out.** A Schwung `midi_fx_api_v1` module (arps, Euclidean/generative sequencers, a MIDI file player) ports as a
+silent instrument whose notes leave through its own ALSA sequencer port (client = plugin name, port "MIDI Out";
+second instance " 2"), libasound `dlopen`ed so the build needs no ALSA headers. Verified on a Live II with a probe
+client: MPC subscribes to a new port within ~5 s, no restart. The user then turns **Track** on for the port in
+Preferences → MIDI and picks it as another track's MIDI input (never on the sequencer's own track, which would hear
+itself). Clock: new optional engine hook `mpc_engine_transport(inst, bpm, ppq, playing)` (`wrapper/engine.h`, weak), called
+by the wrapper each block from `audioMasterGetTime` (tempo, ppqPos, transport-playing flags); the adapter turns it into
+24-PPQN `0xF8` ticks plus Start/Stop and the module's `get_bpm`/`get_clock_status`/`get_beat_position` callbacks.
+Modules that default to an internal clock (`sync=internal`) need a start-up `sync=clock` to follow MPC. Offline
+(probe, host transport simulated): Eucalypso, Super Arp, Groove Bank, Pixel Walkers, Maze Lite, MIDI Player all emit
+correct note on/off pairs. Not yet heard on a device.
+- Schwung's `host/plugin_api_v1.h` asserts `offsetof(host_api_v1_t, reserved) == 120`: a 64-bit (Move) layout fact
+  that fails on 32-bit ARM. The module and adapter compile from one header, so skip the assert when pointers are
+  4 bytes. Older modules ship shorter copies of `host_api_v1_t`; they are prefixes of the current one (same order),
+  so they read their fields at the same offsets.
+
+**Options as text.** Some modules parse only their own option words (`strcmp(val, "natural_minor")`): Eucalypso, Super
+Arp. The wrapper sends an option's index, which they ignore. New param opt-in `"send": [...]` (gen_vst →
+`param_t.send`, one string per option): the option sends that string, and a `get_param` that returns it maps back,
+so the shown labels (`options`) can be friendlier. Others (Denis, Mr Hyde, Maze Lite, MIDI Player, Pixel Walkers)
+also take the index; check each engine's `set_param` before porting.
+
+**Other engine quirks found by host_test.**
+- Labels that start with a digit (Aphex's footage "8'", "16'") were read as option index 8: the wrapper matches an
+  option's own text before treating the value as a number, and clamps an index to the option count.
+- Wurl reapplies its preset on every `preset` set, so restoring a project (MPC sets every param back) undid edits:
+  the wrapper skips a set when the DSP already reports the same value.
+- Option lists too long for a pop-up (Mono Voice LFO destinations: 114) work as steppers: `step_of` now also
+  targets an option param (steps one option, clamped).
+- Tablor (upstream) deletes its instance while its loader thread may still publish into members declared after
+  the loader (ASan heap-use-after-free on a quick insert/remove); join the loader first.
+- host_test's option check now picks an option param that takes its last option. A list that depends on what's
+  loaded (MIDI Player's track of the current file) is skipped with a `warn` line instead of failing.
+
+### Audio effects through the wrapper; Mutable Instruments DSP as plugins (2026-10-01, offline)
+**Effects.** vst.json `"effect": true` makes gen_vst define `PLUG_EFFECT`: the wrapper then reports two inputs, the
+effect category (1) and no `effFlagsIsSynth`, and the plugin-list entry is `category="Effect" isInstrument="0"
+numInputs="2"`. Input reaches the engine through a new optional weak hook `mpc_engine_input(inst, in_lr, frames)`
+(`wrapper/engine.h`), called with each 128-frame block just before that block's render; frames are gathered as they
+arrive, so an effect adds one block (2.9 ms) of latency. A missing input buffer counts as silence. host_test, for an
+effect, feeds a 220 Hz tone and requires output. **Not yet checked on a device:** whether MPC OS lists a third-party
+VST effect from `pluginList-arm` and runs it in an insert slot. A Schwung `audio_fx_api_v2` module (in-place
+`process_block` on the same 128-frame int16 buffers) maps straight onto it.
+
+**Mutable Instruments code without a Move port** works as a small C++ engine around the module's own DSP classes
+(the eurorack repo's desktop tests show the calls): Rings `Part` (strums per MIDI note), Elements `Part` (MIDI drives
+gate, pitch, strength), Warps `Modulator`. Their native rates differ from MPC's 44.1 kHz: Rings 48 kHz and Elements
+32 kHz run at their own rate with a cubic resampler on the output (pitch checked: 1000.09 Hz for a 1 kHz tone);
+Warps' `Init(sample_rate)` takes 44.1 kHz directly; Marbles' generators take the rate as well. A C++ engine must
+include engine.h inside `extern "C"`, or `mpc_engine` is name-mangled and the link fails.
+- Grids (AVR, GPL-3.0) keeps all its state in static members of one class: as a plugin, two instances would share a
+  pattern, so its generator is rewritten per instance (same maps and rules). Steps on 24-PPQN MIDI clock: every
+  6 ticks = the module on a 4 PPQN clock (sixteenths, even map steps), every 3 = its 24 PPQN mode (all 32 steps).
+- Marbles' T generator in external-clock mode follows a gate made from the MIDI clock; its RATE knob then picks a
+  multiply/divide ratio from 9 (index from `1.05 * rate / 96 + 0.5`).
+- Schwung's `plugin_api_v1.h` `_Static_assert` doesn't compile as C++ (Marbles' module is C++): skip it there too.
+- Found by host_test (ASan): Clouds `grain.h` reads `lut_window[4097]` at a grain's exact peak (one past the table;
+  harmless on the module's flash), and the Verglas port's fully-wet `dry_wet = 1.0` reads one past `lut_xfade_in`;
+  Helm's mopo frees a `new[]` buffer with `delete` and copies an uninitialised flag, and its oscillator phases rely
+  on signed overflow (`-fwrapv`). Blades has no code in the repo (analog module).
+
+### Skins from HTML mockups; displays that follow their knobs (2026-10-02, offline)
+HTML screen mockups (1280-wide, e.g. from Google Stitch) convert to layouts with the browser renderer's own Chromium:
+render each tab with the live parts hidden as the page background (`art file=`, the whole 1280x628 area), place our
+widgets at the mockup's control positions, and render each distinct knob look as a filmstrip from the mockup's own
+knob element at each angle (`knob ... strip= frames=`). Knob and slider names/values stay MPC's live labels; the
+mockup's static captions (switch and pop-up titles) stay in the background. Additions to `tools/shadow_skin.py` for
+this: `sw=`/`sh=` on `enum_v` too (segment size), `ns=`/`vs=` on knobs and sliders (name and value font px, for
+controls packed closer than the 130 px labels), and `when=<param>:<i>/<N>` (band i of N of a continuous parameter,
+e.g. sustain), which emits the same `IndexedEnabling/<i>/<N>/Parameter <p>` handle as an option's when= (verified on a
+device for labels following a knob, 2026-09-24).
+- Waveform displays: one picture per option (`picture`), each drawn from the engine's own output for that option.
+- Envelope displays: four `meter` filmstrip columns, A / D / S / R, each bound to its own parameter; D and R come once
+  per sustain band so the curve meets the sustain line. On a Live II the displays follow their knobs and a preset
+  change (2026-10-02), once the strips are laid out as stock (see "FilmStrip `numFrames` is the frame count" below);
+  the second version draws straight segments, with D, S and R all per sustain band.
+
+### VCV Rack modules through a Rack API stand-in (2026-10-02, offline)
+A Rack module's DSP (its `Module` subclass, without the panel widget) runs inside an `mpc_engine_t` with a small
+stand-in for the Rack API: Module config/params/ports/lights, ProcessArgs, `simd::float_4` written portably (four
+floats; comparison results as all-ones lanes, which `ifelse`/`&`/`|`/`~` select on), `dsp::TSchmittTrigger` and
+`PulseGenerator`. First port: Befaco Rampage, as a modulation source whose outputs leave as MIDI CC through the
+plugin's own ALSA port. Two Rack behaviours to remember: `TSchmittTrigger` starts armed-high, so a trigger on the
+very first sample is ignored (feed one low sample first); Rampage's CYCLE only re-fires at the end of a cycle, so a
+loop needs one trigger to start. Not checked on a device: MIDI-learning an incoming CC onto another track's parameter.
+
+### One engine call at a time per instance; a stress test for ports (2026-10-02, crash reported on a Live II)
+Reported on a Live II: Noisemaker took MPC down when VOICES was changed from 1. Reproduced offline: upstream's
+`VoiceManager::setNumberOfVoices` empties the playing-notes list while voices keep sounding (a mono note is never in
+it), so once every voice is busy the next note's "steal the oldest" reads `playingNotes.at(size() - 1)` on an empty
+list: an uncaught `std::out_of_range`, which aborts the host process. Fixed in the port (a real voice-count change
+releases every voice and resets both note lists; a steal with an empty list takes the first voice).
+- Engine calls come from two threads: a JUCE host (MPC's included) sets parameters from the screen on its message
+  thread, and reads displays and chunks there too, while `processReplacing`/`effProcessEvents` run on the audio thread.
+  Most engines here (Schwung modules, ports of single-threaded apps) assume one caller; Noisemaker's VOICES change
+  emptied a vector the audio thread was inserting into. `wrapper/vst2_wrap.c` now takes a per-instance mutex around
+  every engine call (create/destroy excepted): recursive (a host calling back on the same thread can't deadlock) and
+  priority-inheriting (the audio thread waiting on a short screen-side call lifts that thread to its priority). The
+  host is never called with it held. Uncontended it costs one atomic operation; contended, the audio thread waits for
+  one set/get. A slow `set_param` (a file load) now holds audio for its duration instead of racing it, so keep such
+  work as discrete triggers (already the rule above) or move it to a worker thread.
+- Offline stress test (local tool, not in this repo yet): three instances under ASan/UBSan, random values at the ends,
+  middle and anywhere, slow Q-Link-sized ticks, triggers and steppers, every display read, chords/bend/CC/all-off,
+  chunk save on one instance and restore on another, instances closed and reopened; once on one thread and once with
+  audio and control on two threads. Optionally half the steps on one parameter. It found Noisemaker's crash in seconds
+  with VOICES as the focus; the host test (`tools/host_test.c`) doesn't, as it never changes a voice count mid-note.
+- What the stress test found across 36 ports, as patterns to check in any port: a parameter at exactly 1.0 reading
+  one past a lookup table sized for hardware ADCs that never reach full scale (every Mutable stmlib `Interpolate`);
+  pitch sums (note + sample-rate correction + bend + FM) past the range the module's firmware clamped to (Braids);
+  `x - floorf(x)` rounding to exactly 1.0 for tiny negatives, then indexing a table with it (two ports); a scratch
+  buffer shrunk when a port dropped voices but still written at its old size, overwriting the next allocation (a
+  Plaits port's 6-op engine); a sample freed by a state restore while a voice still played it (a drum port). Each was
+  silent in the host test.
+
+### FilmStrip `numFrames` is the frame count; display filmstrips laid out as stock (2026-10-02, verified on a Live II)
+Stock skins set a FilmStrip's `numFrames` to the **number of frames**, and frames need not be square: frame height =
+image height / numFrames (Bassline `knob_phase` 76x258, 3 frames of 86; DrumSynth Multi `drum_names` 190x344, 8 of
+43; Electric `slider_distance` 250x6969, 101 of 69; AIR Flavor 251x8032, 32 square). This repo's display meters had
+been square-padded and resampled to 128 frames with `numFrames` 127, the knob layout: on a device each frame was drawn
+displaced by a few pixels per frame step (~4.5 px per step with 32 square 141 px frames, measured from a screen grab),
+so only value 0 sat right and envelope pieces landed above or below their box. `tools/shadow_skin.py` now writes a
+`meter` as stock does: frames of the meter's own w x h, the strip's own frame count (`frames=`), `numFrames` = that
+count, bounds = w x h. Envelope displays built that way drew correctly on the Live II (screen grab). Knob filmstrips
+(128 square frames, `numFrames` 127) draw correctly as they are and were left alone.
+- **Sliders, the same way (2026-10-03).** Slider filmstrips were still square-padded 128-frame strips, 16640 to 30720
+  px tall (Braids 160x20480, Hush One 240x30720), and the owner saw their thumb animation go "silly" on the Live II.
+  Knob strips up to 96x12288 draw right; so `tools/shadow_skin.py` now builds a slider as stock does (Electric
+  `slider_distance` 250x6969, 101 frames of 69): frames of the slider's own w x h, as many as fit in 12288 px (up to
+  128; a 160 px slider gets 76), `numFrames` = that count, bounds = the slider. Device check pending.
+- Screen grabs: MPC OS draws through a DRM plane, so `/dev/fb0` is black; the scanout buffer can be mapped read-only
+  as root (`/dev/dri/card0`, GETPLANE -> GETFB -> MAP_DUMB): 800 x 1280 XRGB, portrait.
+- Value pictures across two parameters (an envelope's decay segment depends on decay time and the sustain level):
+  one filmstrip per band of the second parameter, shown with `when=<param>:<i>/<N>` (IndexedEnabling), switches
+  cleanly with the knob.
+
+### Q-Link columns, the Q-Link sidebar, and VST programs in MPC's PRESET menu (2026-10-02, verified on a Live II)
+- **One Q-Link rectangle per column.** A 4-knob MPC (Live II) drives one column of the 4x4 Q-Link grid at a time
+  (the Q-Link button moves along) and outlines that column's rectangle from the page's `qlinkBoundsData`, with a "Q"
+  badge. Stock pages give one rectangle per column (AIR Filter Gate, Fuzz-Wah, Channel Strip: four); with one
+  rectangle round the whole page the outline can't show which four controls the knobs are on. `tools/shadow_skin.py`
+  now writes one per column (slots 4c..4c+3 of a page's `qlinks` line = column c, top knob first; an empty column gets
+  `0 0 0 0`). Lay each column's four controls out together: the rectangle is their bounding box, so a column spread
+  across panels outlines other columns' controls too. `qbox=no` on a control keeps it out of its column's box.
+- **The Q-Link sidebar covers the right 255 px.** Touching a Q-Link slides MPC's panel in over x >= ~1025 of the
+  1280-wide screen (four rings with names and values), hiding anything there. Keep controls whose Q-Link you want to
+  see turning out of that strip (Moog's NOISE knob sat at x 1192; moved into the OSC 1 panel).
+- **MPC's PRESET menu lists VST programs.** The plugin header's PRESET dropdown stayed empty because the wrapper
+  reported no programs. With `numPrograms` and `effGetProgramNameIndexed`/`effSetProgram`/`effGetProgram`, it lists
+  them by name and loading one changes the plugin (the page follows). vst.json `"programs": {"param": <preset key>,
+  "name": <name key>}` turns an engine's preset parameter into programs (`wrapper/vst2_wrap.c` reads the names at
+  creation and puts the engine's state back). Moog: 14 patches.
+- **Programs for every instrument with presets (2026-10-03, offline; device check pending).** Stepping through the
+  presets at creation is fine for a fixed built-in list, but not for a list that changes (OB-Xd / Noisemaker banks,
+  Hush One / Mr Drums files the user adds) or one that loads a file per preset (Helm's 275 patches). Two optional
+  `"programs"` keys: `"count"` (the engine's count key; programs = that, within the parameter's range) and
+  `"name_at"` (the engine answers `get_param("<key>:<value>")` with a preset's name without loading it). With
+  `name_at` nothing is stepped or cached: `numPrograms` is re-read after every parameter set and chunk restore, and
+  names are asked for when the host lists them, so the menu follows a bank switch (JUCE's VST host reads
+  `numPrograms` and the names live). Names show and load in MPC's PRESET menu on a Live II (2026-10-03); still to
+  confirm there: that MPC re-reads the list after a bank switch.
+- **The wrapper's own presets (2026-10-03).** For an engine with no presets at all (303, Elements, the effects),
+  vst.json `"presets": "presets.json"` (`{"presets": [{"name", "values": {key: value}}]}`, values in each
+  parameter's own units or an option's label, checked by gen_vst.py) becomes the program list; picking one sets each
+  listed parameter through `set_parameter_locked`, as a touch would. Set every parameter in every preset so switching
+  is deterministic, and order them as the engine needs (the 303's Devilfish switch first: it changes the decay range).
+  The picked index isn't in the engine's state, so after a project reload the menu shows the first preset's name.
+- **MPC's plugin menu: type vs manufacturer (verified on a Live II, 2026-10-03).** MPC.settings has
+  `TouchNewPluginPopupSortByType` / `...SortByManufacturer` (and `NewPluginDialog...`). Sorted by type, VST plugins
+  fall into VST Instruments / VST Effects only: the plugin-list `category` ("Sequencer", "Drum Machine") changes
+  nothing. Sorted by manufacturer, each `manufacturer` value is a folder (Grids registered as "Sequencers" got one).
+  The manufacturer is also in the skin folder name, so changing it means a new skin folder and a re-registration.
+  install.sh now re-registers on a category change too (it compared only name, maker and type).
+  More (2026-10-04, screen recorded with `screengrab/watch.sh`): sorted by type, the instrument list is Akai's own
+  plugins, an "MPC Drum Plugins" folder (Akai's DrumSynth, matched by its `MPC:DrumSynth` identifiers) and one **VST**
+  folder with every VST instrument. The insert-effect list is Akai's effect folders (Delay/Reverb, Dynamics, EQ/Filter,
+  Harmonic, Modulation, Vocal, Vintage Effects) plus a **VST** folder, where third-party VST effects (`isInstrument="0"`,
+  two inputs) are listed. A plugin-list `category` of "Drum", "Drums", "Delay/Reverb", "Modulation" or "Harmonic" moved
+  nothing out of the VST folders. Both lists sort case-sensitively by name (digits, capitals, then lower case: "DX7"
+  before "Denis"), so a bracketed prefix ("[SEQ] Grids") groups plugins after every capitalised name.
+- **The display's DRM card number changes between boots (Live II, 2026-10-04).** After a reboot the display plane was on
+  `/dev/dri/card1` (and `card0` answered `GETPLANERESOURCES` with "Operation not supported"); before, it was `card0`.
+  The screen grabber picks the card whose plane shows a framebuffer.
+- **MPC mirrors every ALSA sequencer port it detects on its own client, so a lookup by name can find MPC's copy (Live II,
+  2026-10-04).** For a new port, MPC's client "MPC" (129 here) adds ports named "<client name> <port name>", the input
+  side writable (the engine port "Euclidier" of client "Mockba" became "Mockba Euclidier"). MPC's client number is lower
+  than any client started after it, so code that walks clients in order and matches a substring of the port name finds
+  MPC's mirror first. sd88me's Euclidier does: `euclidier_vst.cpp`'s `find_engine_input_port()` (strstr "Euclidier")
+  sent its synthesised clock into MPC, not its engine, which then never started (~56 events/s into MPC at 140 BPM,
+  nothing out of the engine). Fix: match the port name exactly, or the engine's pid (`snd_seq_client_info_get_pid`).
+  Workaround with no rebuild: switch MPC's MIDI clock out (**Sync**) on for the output "Mockba Euclidier", which MPC
+  already connects to the engine's input; the engine follows MPC's clock and start/stop (verified: notes on channels 1
+  and 10 straight away).
+- **MIDI CC 20-35 drive the first page's Q-Links, in the wrapper (2026-10-04, offline; not yet seen on a device).**
+  gen_vst.py writes `PLUG_CC[16]` (params.h) from the first tab's first `qlinks` line, in slot order (column 1 top to
+  bottom = CC 20-23, column 2 = 24-27 ...; triggers and text displays left out); vst.json `"cc": false` turns it off.
+  effProcessEvents sets the parameter as a Q-Link turn would (an option list rounds to the nearest option) and keeps
+  the CC from the engine; run_block() tells MPC (audioMasterAutomate) at most every 1024 frames per control, so the
+  screen follows without a flood. Why in the wrapper and not MPC's MIDI learn: on the Live II, a CC-generating
+  plugin's port with **Remote** switched on, while MIDI Learn was open, froze MPC (it had to be forced off) with
+  Rampage sending ~575 CCs a second; learning from a plugin's port is still unexplored. The CC map needs nothing from
+  MPC beyond the track's MIDI input (the routing a sequencer's notes already use): a sequencer's per-step CCs
+  (Stevequencer's MOD lanes) or a controller move the instrument directly. **Verified on the Live II (2026-10-05):**
+  Stevequencer's MOD lanes on CC 20/21 move the instrument's controls through the track's MIDI input (the owner: "the
+  automation lanes are working"); none of 20-35 seen kept by MPC so far.
+- **MPC hands a plugin every note-on on MIDI channel 1, but its note-off on the channel it came on (Live II, MPC OS
+  3.9.1, 2026-10-12).** A MIDI track sending on channel 3 into an instrument plugin's track reached the plugin (a trace
+  build logging each `effProcessEvents` message) as `90 41 7f` ... `82 41 40`: the note-on on channel 1, its note-off
+  on channel 3; velocity 127 from the MIDI track; pairs of CC 123 and CC 64 = 0, on channel 1, before the notes (the transport,
+  probably: not traced to a cause). So a plugin can't tell
+  channels apart by the note-on (Percolator's per-voice MIDI channels didn't work through its track; it opens its
+  own ALSA input port for them instead, which a MIDI track sends to as its output port), and a plugin that ends a
+  note only on a note-off of the same channel never ends it: match note-offs by note alone.
+  **A plugin's own ALSA input port works as a MIDI track's output, channels intact (Live II, 2026-10-12).** A writable
+  port (client "Percolator", port "MIDI In", opened at create, read without blocking in the render callback) appears
+  in a MIDI track's MIDI OUTPUT PORT list as "Percolator MIDI In" once the plugin is on a track (no restart), and the
+  track's notes arrive on its MIDI OUTPUT CH. The wrapper passes the status byte through unchanged.
+- **A Q-Link column per panel: `-` leaves a slot empty (2026-10-03).** Columns are fixed groups of four slots, so a
+  page laid out 3-2-4-3 (or a two-knob panel) can still give each panel its own column, with its outline round that
+  panel only: `qlinks "MAIN" = wave,tune,-,-,cutoff,reso,env,decay,...`. The empty slot does nothing on the knob.
+
+### Animated displays cost MPC's screen thread too much; keep skin pictures still (2026-10-02, measured on a Live II)
+A plugin can animate a skin: a display-only parameter the wrapper changes while it sounds, a filmstrip bound to it,
+and a host call so MPC repaints (MPC does repaint: the "engine-driven changes never reach the display" gap above is
+closed by `audioMasterUpdateDisplay` or `audioMasterAutomate` from `processReplacing`). It works, but MPC's main
+(screen) thread pays for every repaint. Measured with per-thread `/proc` ticks (`steve/tools/screengrab/cpuwatch.sh`),
+idle on the page ~5-12% of one core:
+- one 566x122 filmstrip scrolled at 15 fps, `audioMasterUpdateDisplay`: main thread 25-55%;
+- a 48-column dot scope (48 display parameters, 10 fps, UpdateDisplay): 46-58%, peaks ~95%; 96 columns: 35-51%;
+- the 96-column scope with one `audioMasterAutomate` per moved column instead: 107-113% (a whole core);
+- a shape bank (191 recorded shapes in two 566x11712 strips, one or two parameter changes per redraw, 12 fps):
+  26-76%, and it looked steppy (user: "looks and feels kinda shit").
+Audio threads were unaffected in every case. Conclusion: MPC's skin renderer is built for controls that change when
+touched, not for animation; repainting a large picture several times a second is expensive however it is driven.
+Waveform displays stay still pictures that follow their switches (`picture`, IndexedEnabling: free). The wrapper
+keeps the opt-in vst.json `"scope"` (`wrapper/scope.h`, a shape bank from `steve/tools/scope`) for small or rare
+displays; nothing ships with it.
+- Memory: MPC decodes skin images to 4 bytes a pixel; a 566x122 x 384-frame strip set is ~106 MB (the Live II had
+  ~970 MB available and no swap). Keep filmstrips small.
+
+### Engine-driven display parameters, per-sub-page controls (2026-10-04, offline; Stevequencer)
+- **`"live"` parameters.** vst.json `"live": [<key>, ...]` (gen_vst.py -> `PLUG_LIVE`): after every block the wrapper
+  reads those parameters and calls `audioMasterAutomate` for any that changed (outside the engine lock), closing the
+  "engine-driven changes never reach the display" gap (2026-09-25) for a value the engine moves by itself. First use:
+  a sequencer's playing step (an option parameter, 65 options) driving one outline picture per step cell
+  (`when=play_step:<n>`, IndexedEnabling). Offline: the host saw one report per step. Still to measure on the Live II:
+  MPC's screen thread at ~8 reports a second, and whether MPC records these as automation while recording.
+- **`banks="A|B"`** on a control or art line (shadow_skin.py): it is only on those Q-Link sub-pages (the tab's
+  `qlinks` names), so a tab's sub-pages can differ in what they show and what touch edits, not only in the Q-Link
+  map. Unlike the reverted per-bank split screens (2026-09-24) the screen stays the same; only the parts that follow
+  the sub-page change. An art line with banks= becomes its own image on those sub-pages.
+- Small widget options for custom cells: `knob ... lay=side bw= bh=` (picture at the left, value centred in the rest,
+  no name), `ns=0` on a knob or an image toggle (no name label), `readout ... vs= ink= box=no`. check_skin.py and
+  showcase.py (`--banks`) know banks=.
+- Not checked on a device yet: how MPC names and switches six sub-pages per tab (25 pages, 5.3 MB TUI.json: twice
+  Helm's), and that 418 parameters load and save without trouble.
+
+### Ports made for other forks of this framework (2026-10-05, offline; MPC Plaits, Mutable Vibe)
+Two MPC-native ports from other authors, built here unchanged where possible: poloq's MPC Plaits (made on
+poloq-instruments/mpc-vst-plugins, branch `poloq-dev`) and nachtaktiv303's Mutable Vibe (made on a newer `main`).
+- **`HAS_TRANSPORT`** (from poloq's fork, b27da6b): vst.json `"defines": {"HAS_TRANSPORT": 1}` makes the wrapper tell
+  the engine `"transport"` = `"1"` when the host starts playing or jumps back while playing (a loop, a locate) and `"0"`
+  when it stops, so synced LFOs and retriggers restart with the song. Compiled out unless defined. Not yet seen on a
+  device here (poloq: MPC One).
+- **`dynamic_name` / `dynamic_display`** (newer upstream, c20f4ea and 26b4c58): a parameter flagged in params.json
+  gets its name from the engine's `get_param("<key>_name")` and its value text from `"<key>_display"` (falling back to
+  the static name and the usual text), so Mutable Vibe's macro knobs read STRUCTURE on a Rings model and HARMONICS on a
+  Plaits one, and DELAY TIME reads "375 ms (1/8.)". The value stays numeric. Here the engine calls take the engine lock.
+  host_test's range check skips `dynamic_display` parameters (their text isn't their value); the restore check still
+  covers them. Device check pending: that MPC's knob label and Q-Link sidebar follow a renamed parameter after a model
+  change (upstream: MPC re-reads a Label "Name" on `audioMasterUpdateDisplay`).
+- Not taken from that fork: `settle()` (this wrapper's shadow position already makes a Q-Link turn on a stepped value
+  move one detent per step's width, verified on a Live II) and popup `wheel=1` (marked experimental there; without it a
+  pop-up still opens on a tap and its Q-Link still turns it). Option targets of `step_of` clamp at the ends here; the
+  fork wraps round.
+- **Option labels that are numbers.** This wrapper reads an engine's answer as an option's label before reading it as
+  an index (so `8'` is a label, not option 8); upstream reads a leading digit as an index. An engine that reports its
+  options by index while some labels are numbers needs `"send"` with the indexes: Mutable Vibe's POLY (`1,2,3,4`, the
+  engine reporting `3` for 4 voices restored as 3) and LFO DIVISION (`... 1/2, 1, 2, 4`: `2`, i.e. 1/4, showed as
+  2 bars). The restore check caught POLY only: DIVISION was wrong but stable (same position read back).
+- Newer upstream builds add `-I wrapper` for `engine.h`; here a port keeps its own copy (`mpc/engine.h`).
+- **`bw=` on a toggle drawn as a picture** (`img=`): its box (and name width) instead of 120 px, as for knobs and
+  sliders, and its Q-Link outline follows. MPC Plaits' LED switches sit 80 px apart and their matrix LEDs 84 px right
+  of a knob, so neighbouring boxes overlapped by 20-41 px (offline, check_skin.py). steve/tools/stitch/check_skin.py
+  now also leaves out pairs that `when=` never shows together (RATE and DIV by a SYNC switch).
+- **Presets may set a Schwung integer.** The Schwung adapter marks a module's `int` parameters `"display": "string"`
+  (the value text is the engine's), and gen_vst.py refused them in a port's `presets.json` as text readouts. A
+  string display with a range is a number like any other; only a range-less one (a name readout) is refused now.
+  MPC Plaits' presets set NOTES, UNISON, GLIDE and the envelope times.
+
+### Any parameter by NRPN; Stevequencer 16 (2026-10-05, offline)
+- **NRPN n sets parameter n**, any page, in every plugin (wrapper `nrpn_locked()`): CC 99 / 98 pick the number (high /
+  low 7 bits), CC 6 sets the value (7 bits, 127 = the top), CC 38 refines it (14 bits). Numbers are VST indexes, so
+  `docs/parameter-numbers.md` (vst_instruments, from `tools/param-numbers.py`) lists them as P = index + 1. Pop-up open
+  flags, step buttons and text readouts aren't settable this way. The data CCs are the wrapper's only while an NRPN is
+  selected: after an RPN (CC 101 / 100) CC 6 / 38 reach the engine as before. The CC map (CC 20-35) and NRPN share
+  one per-parameter "tell MPC" path (`midi_set_locked`, throttled per parameter as before).
+- Why NRPN and not more CCs: every page of every plugin, with no MIDI learn and no per-plugin CC table to remember;
+  the owner picks the parameter per project ("too many synths and too many parameters"). host_test sends NRPN to the
+  last settable parameter (exercising a 14-bit number, e.g. 551 on Stevequencer) and checks an RPN doesn't reach it.
+- Still to check on a device: that MPC passes CC 99 / 98 / 6 from a track's MIDI input (CC 20/21 do).
+- Stevequencer 16 (vst_instruments `originals/stevequencer16`): 16 steps, eight lanes (CC or PARAM = NRPN; HOLD,
+  RETURN, SLIDE, LFO, FOLLOW; per-lane RATE and LENGTH), lane values worked out eight times a step and sent on change.
+  Its copy of Schwung's `midi_fx_api_v1.h` raises MIDI_FX_MAX_OUT_MSGS 16 -> 64 (eight NRPN lanes at a step are 24
+  messages); the adapter only sizes its buffer with it.
+
+### 2026-10-20: the data wheel and touch actions, from Akai's own skins and a list on a Live II (MPC OS 3.9.1)
+Akai's own plugin skins on the device (`/usr/share/Akai/Content/Synths/*/Plugin Skins/`, 248 files; read, not kept)
+use four touch actions, all on the control's own `Data` handle: `Mouse Down` → `Q-Link` (148), `Enter Pressed` →
+`Toggle Switch` (70), and `Double Click` / `Enter Pressed` → `Show Overlay`. Named handles appear only as indirection:
+a parent component maps names to parameters and a child's `Data` points at one of those names; `acceptsHWFocus` is
+`Yes` on what the data wheel may turn (`Children` on a parent). A list whose rows also ran `Mouse Down` → `Q-Link`
+on a second, named handle bound to a cursor parameter (`wheel=`, tried in Incipience 1.1.0's drafts) didn't move the
+cursor with the data wheel ("the big mpc job wheel doesn't do anything"); taps on the rows still worked. So a control
+can't hand the wheel to another parameter: the wheel turns the `Data` of the control a touch focused (a stepper box
+does it). `list ... focus=no` keeps every row out of the hardware focus, so tapping rows leaves the wheel where it was
+(confirmed on the Live II the same day: the wheel on a stepper box, then rows tapped, the wheel still on the box). Same session: a cursor on a Q-Link with `nudge_pct` "change[s] really really quickly and skip[s] a few
+rows": a small turn of a Live II Q-Link is several events. Counting events per step (`qlink_ticks`, or in the engine)
+slows it, but the wheel's clicks are the same small moves, so a parameter turned by both needs a Q-Link-only twin
+(three events a step on the Live II's Q-Links: "this is working").
