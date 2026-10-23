@@ -34,7 +34,11 @@ Layout file:
                                                         label_align=center needs "art": "html")
     list    x= y= w= h= cols= rows= th= gap= key=<p>   (rows = params <p>_1..<p>_N: text + tap;
                                                         order=pads numbers the rows from the bottom, like a pad bank;
-                                                        order=cols numbers down each column first, so it reads top to bottom)
+                                                        order=cols numbers down each column first, so it reads top to bottom;
+                                                        ink=RRGGBB the rows' text colour (as tcolor=), lit=RRGGBB the
+                                                        border of a row whose value reads 1 (default the active segment's
+                                                        colour), focus=no: no row takes the hardware focus, so a tap on one
+                                                        leaves the data wheel on the control it was turning)
     art     file="drawing.svg" [x= y= w= h=] [fit=]    (an SVG drawing, e.g. from studio.py from-svg, or a .png/.jpg/.webp
                                                         image, drawn into the page background: the whole plugin area, or
                                                         the box; fit=contain|cover|stretch; browser renderer only)
@@ -1140,13 +1144,20 @@ def build(layout_path, params, skin_dir, art_bin, png_from_ppm):
             elif kind == "list":
                 for slot, ((x, y, tw, th), sk) in enumerate(zip(list_tiles(w), list_keys(w))):
                     own = w.get("img")   # img=/img_on=: the port's own card pictures (off, selected)
+                    lit = w.get("lit", SEG_ON)   # lit=: the selected row's border colour
                     img = "sh_tile_%dx%d" % (tw, th) if not own else "sh_card_%s_%dx%d" % (slug(w["key"]), tw, th)
+                    if lit != SEG_ON and not own:
+                        img += "_" + lit
                     for state, border in (("on", 3), ("off", 0)):
                         drawn = card_art(w.get("img_on", own) if border else own, x, y, tw, th, base_dir) if own else \
-                            "tile|%d|%d|%d|%d|%s|%s|%d" % (x, y, tw, th, (TILE_ON or LCD) if border else LCD, SEG_ON if border else LINE, border)
+                            "tile|%d|%d|%d|%d|%s|%s|%d" % (x, y, tw, th, (TILE_ON or LCD) if border else LCD, lit if border else LINE, border)
                         script += ["clear|" + under(), drawn,
                                    "crop|%s|%d|%d|%d|%d" % (art("%s_%s" % (img, state)), x, y, tw, th)]
-                    size, colour, just, style, font, sig = live_text(w, 24.0, ACCENT, ROW_JUST)
+                    size, colour, just, style, font, sig = live_text(w, 24.0, w.get("ink", ACCENT), ROW_JUST)
+                    if w.get("ink") and "tcolor" not in w:   # ink= (as tcolor=): its own component, like any tcolor=
+                        sig += "_" + w["ink"]
+                    if lit != SEG_ON:
+                        sig += "_" + lit
                     # tx=/ty=/ttw=/tth= place the row's text inside the card (default: the whole row, 12 px in)
                     lx, ly = int(w.get("tx", 12)), int(w.get("ty", 0))
                     lw, lh = int(w.get("ttw", tw - lx - 12)), int(w.get("tth", th - ly))
@@ -1156,7 +1167,9 @@ def build(layout_path, params, skin_dir, art_bin, png_from_ppm):
                     defs.setdefault(key, _local(key, [_action("Mouse Down", "Toggle Switch"), _action("Enter Pressed", "Toggle Switch")],
                                                 [_focus(tw, th), _button(img + "_on.png", img + "_off.png", 1, 1, tw, th),
                                                  _value_label(lx, ly, lw, lh, size, colour, just, style=style, font=font)]))
-                    kids.append(_placed(key, "%s %d" % (name, slot + 1), index[sk], x, y, tw, th, focus="Yes" if slot == 0 else "No"))
+                    nofocus = str(w.get("focus", "")).lower() in ("no", "0", "off")   # focus=no: no row takes the focus
+                    kids.append(_placed(key, "%s %d" % (name, slot + 1), index[sk], x, y, tw, th,
+                                        focus="Yes" if slot == 0 and not nofocus else "No"))
             else:  # enum_h / enum_v: radio group, one image button per option
                 n = len(w["options"])
                 for o, (x, y, sw, sh) in enumerate(seg_rects(w)):
