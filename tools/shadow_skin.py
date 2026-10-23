@@ -836,12 +836,24 @@ def build(layout_path, params, skin_dir, art_bin, png_from_ppm):
         # widget_stepper/dot_stepper) as the tap-zone's own on/off image. An empty onImage/
         # offImage ("") makes MPC show a generic placeholder caption ("Button") over the arrow
         # instead of nothing -- found on a real device (the stepper feature's first hardware test).
+        # A stepper on some sub-pages only (banks=) has its arrows in that sub-page's picture: drawn again for it,
+        # once per sub-page (what's drawn now is the last mode's, another sub-page's when they differ).
+        own = {}
         for w in tab["widgets"]:
             if w["kind"] != "stepper":
                 continue
-            for side, (ax, ay, aw, ah) in zip(("prev", "next"), stepper_arrows(w)):
-                img = "sh_arrow_%d_%s_%s" % (t, w["key"], side)
-                script.append("crop|%s|%d|%d|%d|%d" % (art(img), ax, ay, aw, ah))
+            hnd = next((h for h in modes if isinstance(h, tuple) and banks_of({"banks": h[1]}) & (banks_of(w) or set())),
+                       None)
+            own.setdefault(hnd, []).append(w)
+        for hnd in sorted(own, key=lambda h: h is not None):   # the rest first, from the picture as it is
+            if hnd is not None:
+                script.append("clear|" + PLATE)
+                for w in base + modes[hnd]:
+                    script += baked_cmds(w, TITLE_FONT, base_dir)
+            for w in own[hnd]:
+                for side, (ax, ay, aw, ah) in zip(("prev", "next"), stepper_arrows(w)):
+                    img = "sh_arrow_%d_%s_%s" % (t, w["key"], side)
+                    script.append("crop|%s|%d|%d|%d|%d" % (art(img), ax, ay, aw, ah))
 
         on_top = []   # popup panels: drawn last, so an open list covers (and takes touches from) the page
         bpend = None   # (first kid, first on_top part, banks) of the last banks= control, tagged once it is done
