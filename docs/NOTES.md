@@ -1328,6 +1328,11 @@ Measured with a pass-through probe around a transport-following plugin, logging 
 - **During the count-in MPC reports the transport playing**, with `kVstTransportRecording` set (flags `0x7fce`; that run
   was Rec + Play). `ppqPos` runs on through the count-in bar (1.43 to 5.42 there), `barStartPos` stays 0, and when the
   real playback starts `ppqPos` and `samplePos` jump back to the start (0) and run on normally (bar starts 4, 8, 12).
+- **A count-in started with a plain Play** (Count-In set to Record + Play; flags `0x7fc7`, then `0x7fc6`, no recording
+  flag) looks different: `ppqPos` first runs on from a stale position (14.18, where an earlier playback had got to) for
+  1.8 beats, jumps back to about 0 (0.0041) and runs to 1.68, then jumps back to 0 again at the real start. **Both kinds
+  last exactly one bar from the first report that says playing** (1.90 s at 126 BPM, in both runs), so the real start is
+  the jump back that comes a bar after Play; an earlier jump is part of the count-in.
 - **While stopped, `ppqPos` and `samplePos` read 0 wherever the playhead is; `barStartPos` follows the playhead, bar by
   bar**, as it is moved. A plain Play (flags `0x7fc7` on the first answer, then `0x7fc6`; no recording flag) starts
   exactly where the playhead was parked (`ppqPos` 0.0000 / 9.2500 / 7.0000 in three runs). So a start inside the parked
@@ -1335,10 +1340,12 @@ Measured with a pass-through probe around a transport-following plugin, logging 
 - **MPC's Metro > Count-In (Off / Record / Record + Play) is not in what a plugin gets.** MPC.settings has
   `metronomeCountIn` (2 here, likely Record + Play in the menu's order) and `recordDuringCount`, but MPC doesn't write
   them when they change (the file still said 2 after count-in was switched off), so a plugin can't follow them there.
-- The wrapper now passes the recording flag to `mpc_engine_transport()` (`playing` gets `MPC_TRANSPORT_RECORDING`
-  added, `wrapper/engine.h`). saustin2010/vst_instruments' MIDI sequencers use it with a COUNT-IN setting the user
-  matches to MPC's: on a fresh start that may be a count-in (Record + Play, or Record with the flag set) they send
-  nothing until `ppqPos` jumps back, then start there; with no jump within nine beats they start anyway.
+- The wrapper passes the recording flag and the time signature to `mpc_engine_transport()` (`playing` gets
+  `MPC_TRANSPORT_RECORDING` added and the signature in bits 8-23, `wrapper/engine.h`). saustin2010/vst_instruments' MIDI
+  sequencers use them with a COUNT-IN setting the user matches to MPC's: on a fresh start that may be a count-in
+  (Record + Play, or Record with the flag set) they send nothing until the jump back that comes a bar after Play (from
+  three quarters of a beat before the bar's end), then start there; with no jump by a beat after the bar they start
+  anyway. Their first version took the first jump back and started mid count-in on a plain Play.
 
 ## Notes from saustin2010/vst_instruments (2026-09-30 to 2026-10-20)
 

@@ -30,11 +30,15 @@ const mpc_engine_t *mpc_engine(void);
 
 /* Optional: an engine that follows the host transport (a MIDI sequencer clocked from the host) defines this; the wrapper
  * calls it once per host buffer, before rendering it, with the tempo (BPM, 0 if unknown), the song position in quarter
- * notes at the start of the buffer (<0 if unknown) and whether the transport is playing: non-zero while it plays, and
- * MPC_TRANSPORT_RECORDING (2) added while the host records too (MPC counts in with it set: docs/NOTES.md, 2026-10-24).
+ * notes at the start of the buffer (<0 if unknown) and whether the transport is playing: 0 while stopped; while it
+ * plays, bit 0 set, MPC_TRANSPORT_RECORDING (2) added while the host records too, and the time signature the host gives
+ * in bits 8-15 (numerator) and 16-23 (denominator), 0 if unknown. MPC counts in for one bar with the transport reported
+ * playing (docs/NOTES.md, 2026-10-24): the bar's length tells an engine when the count-in ends.
  * Weak: engines that don't define it are unaffected, and HAS_TRANSPORT / HAS_LFO_BPM (vst2_wrap.c) still work alongside
  * it. */
 #define MPC_TRANSPORT_RECORDING 2
+#define MPC_TRANSPORT_SIG_NUM(playing) (((playing) >> 8) & 0xff)
+#define MPC_TRANSPORT_SIG_DEN(playing) (((playing) >> 16) & 0xff)
 void mpc_engine_transport(void *inst, double bpm, double ppq, int playing) __attribute__((weak));
 
 /* Optional: an engine that changes its own parameters (MIDI it reads on a port of its own, say) reports them here, one

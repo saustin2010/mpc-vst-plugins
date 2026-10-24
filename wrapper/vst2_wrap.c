@@ -126,7 +126,7 @@ enum {
     effGetVendorVersion = 49, effCanDo = 51, effGetVstVersion = 58,
 };
 enum { audioMasterAutomate = 0, audioMasterGetTime = 7, audioMasterUpdateDisplay = 42, kVstTempoValid = 1 << 10 };
-enum { kVstTransportPlaying = 1 << 1, kVstTransportRecording = 1 << 3, kVstPpqPosValid = 1 << 9 };
+enum { kVstTransportPlaying = 1 << 1, kVstTransportRecording = 1 << 3, kVstPpqPosValid = 1 << 9, kVstTimeSigValid = 1 << 13 };
 enum { effFlagsCanReplacing = 1 << 4, effFlagsProgramChunks = 1 << 5, effFlagsIsSynth = 1 << 8 };
 
 /* ---- per-instance state ------------------------------------------------- */
@@ -552,12 +552,19 @@ static void housekeeping(AEffect *e, int32_t n) {
     wrap_t *w = e->object;
     if (HAS_LFO_BPM || HAS_TRANSPORT) update_tempo(w);
     if (mpc_engine_transport) {   /* an engine that follows the transport (engine.h): tempo, position, play, each buffer */
-        VstTimeInfo *ti = (VstTimeInfo *)w->master(&w->fx, audioMasterGetTime, 0, kVstTempoValid | kVstPpqPosValid, 0, 0);
+        VstTimeInfo *ti = (VstTimeInfo *)w->master(&w->fx, audioMasterGetTime, 0,
+                                                   kVstTempoValid | kVstPpqPosValid | kVstTimeSigValid, 0, 0);
         if (ti) {
+            int playing = 0;   /* engine.h: bit 0, MPC_TRANSPORT_RECORDING, the time signature in bits 8-23 */
+            if (ti->flags & kVstTransportPlaying) {
+                playing = 1 + ((ti->flags & kVstTransportRecording) ? MPC_TRANSPORT_RECORDING : 0);
+                if ((ti->flags & kVstTimeSigValid) && ti->timeSigNumerator > 0 && ti->timeSigNumerator < 256 &&
+                    ti->timeSigDenominator > 0 && ti->timeSigDenominator < 256)
+                    playing |= ti->timeSigNumerator << 8 | ti->timeSigDenominator << 16;
+            }
             pthread_mutex_lock(&w->lock);
             mpc_engine_transport(w->dsp, (ti->flags & kVstTempoValid) ? ti->tempo : 0,
-                                 (ti->flags & kVstPpqPosValid) ? ti->ppqPos : -1,
-                                 (ti->flags & kVstTransportPlaying) ? 1 + ((ti->flags & kVstTransportRecording) ? MPC_TRANSPORT_RECORDING : 0) : 0);
+                                 (ti->flags & kVstPpqPosValid) ? ti->ppqPos : -1, playing);
             pthread_mutex_unlock(&w->lock);
         }
     }
