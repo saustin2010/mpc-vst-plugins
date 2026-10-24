@@ -126,7 +126,7 @@ enum {
     effGetVendorVersion = 49, effCanDo = 51, effGetVstVersion = 58,
 };
 enum { audioMasterAutomate = 0, audioMasterGetTime = 7, audioMasterUpdateDisplay = 42, kVstTempoValid = 1 << 10 };
-enum { kVstTransportPlaying = 1 << 1, kVstPpqPosValid = 1 << 9 };
+enum { kVstTransportPlaying = 1 << 1, kVstTransportRecording = 1 << 3, kVstPpqPosValid = 1 << 9 };
 enum { effFlagsCanReplacing = 1 << 4, effFlagsProgramChunks = 1 << 5, effFlagsIsSynth = 1 << 8 };
 
 /* ---- per-instance state ------------------------------------------------- */
@@ -556,7 +556,8 @@ static void housekeeping(AEffect *e, int32_t n) {
         if (ti) {
             pthread_mutex_lock(&w->lock);
             mpc_engine_transport(w->dsp, (ti->flags & kVstTempoValid) ? ti->tempo : 0,
-                                 (ti->flags & kVstPpqPosValid) ? ti->ppqPos : -1, (ti->flags & kVstTransportPlaying) != 0);
+                                 (ti->flags & kVstPpqPosValid) ? ti->ppqPos : -1,
+                                 (ti->flags & kVstTransportPlaying) ? 1 + ((ti->flags & kVstTransportRecording) ? MPC_TRANSPORT_RECORDING : 0) : 0);
             pthread_mutex_unlock(&w->lock);
         }
     }

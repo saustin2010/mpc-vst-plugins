@@ -1321,6 +1321,25 @@ Ports that need the opt-in: `dynamic_name` labels following a selector (Machined
 JV-880 rebuilt with this and the 50 ms cap): Q-Links on track edit → automation work, and the bank and patch readouts still follow
 the stepper arrows and a direct Q-Link turn.
 
+## MPC's count-in, as a plugin sees it (Live II, MPC OS 3.9.1, 2026-10-24)
+Measured with a pass-through probe around a transport-following plugin, logging every `audioMasterGetTime` answer
+(126 BPM, 4/4, a one-bar count-in; three runs). A plugin that starts on `kVstTransportPlaying` plays the count-in bar
+(a user report: a Euclidean sequencer "starts before the MPC starts").
+- **During the count-in MPC reports the transport playing**, with `kVstTransportRecording` set (flags `0x7fce`; that run
+  was Rec + Play). `ppqPos` runs on through the count-in bar (1.43 to 5.42 there), `barStartPos` stays 0, and when the
+  real playback starts `ppqPos` and `samplePos` jump back to the start (0) and run on normally (bar starts 4, 8, 12).
+- **While stopped, `ppqPos` and `samplePos` read 0 wherever the playhead is; `barStartPos` follows the playhead, bar by
+  bar**, as it is moved. A plain Play (flags `0x7fc7` on the first answer, then `0x7fc6`; no recording flag) starts
+  exactly where the playhead was parked (`ppqPos` 0.0000 / 9.2500 / 7.0000 in three runs). So a start inside the parked
+  bar looks the same as a count-in starting there: the position alone can't tell them apart.
+- **MPC's Metro > Count-In (Off / Record / Record + Play) is not in what a plugin gets.** MPC.settings has
+  `metronomeCountIn` (2 here, likely Record + Play in the menu's order) and `recordDuringCount`, but MPC doesn't write
+  them when they change (the file still said 2 after count-in was switched off), so a plugin can't follow them there.
+- The wrapper now passes the recording flag to `mpc_engine_transport()` (`playing` gets `MPC_TRANSPORT_RECORDING`
+  added, `wrapper/engine.h`). saustin2010/vst_instruments' MIDI sequencers use it with a COUNT-IN setting the user
+  matches to MPC's: on a fresh start that may be a count-in (Record + Play, or Record with the flag set) they send
+  nothing until `ppqPos` jumps back, then start there; with no jump within nine beats they start anyway.
+
 ## Notes from saustin2010/vst_instruments (2026-09-30 to 2026-10-20)
 
 Kept from that repo's old patch on `39660f2` when its builds moved to this branch (2026-10-23). Each section is as it was written then: where it names a wrapper feature, that is now `QLINK_TRAVEL`/`SET_IF_CHANGED`, `"live"`, `"programs"` or `mpc_engine_transport()` on this branch.
